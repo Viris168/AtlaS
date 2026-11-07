@@ -1,0 +1,36 @@
+{"question": "What problem does this protocol solve for AI assistants?", "source": "MCP_Documentation.md", "section": ""}
+{"question": "Which package do I pip install to get started?", "source": "MCP_Documentation.md", "section": "Installation"}
+{"question": "Will this work on Python 3.8?", "source": "MCP_Documentation.md", "section": "Installation"}
+{"question": "How does a client talk to a server running as a local process on the same machine?", "source": "MCP_Documentation.md", "section": "Server Setup", "subsection": "Transports"}
+{"question": "Can a server be reached over the network, and over what protocol?", "source": "MCP_Documentation.md", "section": "Server Setup", "subsection": "Transports"}
+{"question": "What kind of credentials do clients present to a hosted server?", "source": "MCP_Documentation.md", "section": "Server Setup", "subsection": "Authentication"}
+{"question": "Which environment variable holds the access token?", "source": "MCP_Documentation.md", "section": "Server Setup", "subsection": "Authentication"}
+{"question": "How do I expose a Python function so the assistant can call it?", "source": "MCP_Documentation.md", "section": "Server Setup", "subsection": "Tool Registration"}
+{"question": "What fields does every tool have to define?", "source": "MCP_Documentation.md", "section": "Server Setup", "subsection": "Tool Registration"}
+{"question": "My client says 'Method not found'. What is wrong?", "source": "MCP_Documentation.md", "section": "Troubleshooting"}
+{"question": "The server rejects a call even though I think the tool exists. What should I check?", "source": "MCP_Documentation.md", "section": "Troubleshooting"}
+{"question": "Which database stores the chunks?", "source": "DOCUMENTATION.md", "section": "Vector Store"}
+{"question": "How do I open the database without deleting what is already stored?", "source": "DOCUMENTATION.md", "section": "Vector Store"}
+{"question": "How fast can I call the API before I get throttled?", "source": "DOCUMENTATION.md", "section": "Rate Limits"}
+{"question": "I keep getting 'too many requests' errors. What should my client do?", "source": "DOCUMENTATION.md", "section": "Rate Limits"}
+{"question": "Is the request limit per user or per key?", "source": "DOCUMENTATION.md", "section": "Rate Limits"}
+{"question": "How do I build the container image?", "source": "DOCUMENTATION.md", "section": "Deployment"}
+{"question": "Which port does the container listen on?", "source": "DOCUMENTATION.md", "section": "Deployment"}
+{"question": "How do I run the assistant in a container?", "source": "DOCUMENTATION.md", "section": "Deployment"}
+{"question": "How do I authenticate requests to the billing API?", "source": "api_reference.md", "section": "Authentication"}
+{"question": "How often do I have to rotate my API key?", "source": "api_reference.md", "section": "Authentication"}
+{"question": "What does quota_exceeded mean?", "source": "api_reference.md", "section": "Errors", "subsection": "Error codes"}
+{"question": "Does creating more keys give me a higher hourly limit?", "source": "api_reference.md", "section": "Errors", "subsection": "Quotas"}
+{"question": "How do I get the next page of invoices?", "source": "api_reference.md", "section": "Pagination"}
+{"question": "How can I make sure retrying a POST doesn't charge the customer twice?", "source": "api_reference.md", "section": "Idempotency"}
+{"question": "How do I verify that a webhook really came from you?", "source": "api_reference.md", "section": "Webhooks", "subsection": "Signing"}
+{"question": "What happens if my webhook endpoint keeps timing out?", "source": "api_reference.md", "section": "Webhooks", "subsection": "Delivery and retries"}
+{"question": "Who carries the pager if the primary doesn't respond?", "source": "oncall_handbook.html", "section": "Rotation"}
+{"question": "How fast must a SEV2 be acknowledged?", "source": "oncall_handbook.html", "section": "Severity levels"}
+{"question": "When should I involve the security lead?", "source": "oncall_handbook.html", "section": "Escalation"}
+{"question": "Can I ship a hotfix on December 24?", "source": "oncall_handbook.html", "section": "Deploy freeze", "subsection": "Exceptions"}
+{"question": "Are config changes allowed on a Friday evening?", "source": "oncall_handbook.html", "section": "Deploy freeze", "subsection": "Freeze windows"}
+{"question": "How soon after an outage is the postmortem due?", "source": "oncall_handbook.html", "section": "After an incident"}
+{"question": "Which port does the container use after upgrading to 2.3?", "source": "release_notes.txt", "contains": "9000"}
+{"question": "Where did the health check endpoint move?", "source": "release_notes.txt", "contains": "/healthz"}
+{"question": "Which release dropped Python 3.9?", "source": "release_notes.txt", "contains": "Python 3.9 is no longer supported"}

@@ -1,0 +1,23 @@
+Release notes
+
+v2.4.0 (2026-05-18)
+Added streaming responses to the assistant API. Clients opt in with the stream=true parameter.
+The vector store now compacts itself nightly at 02:00 UTC; queries keep working during compaction.
+Fixed a bug where documents with Windows line endings produced empty chunks.
+
+v2.3.0 (2026-03-02)
+Breaking: the default container port changed from 8080 to 9000. Set PORT=8080 to keep the old behaviour.
+The Docker image is now based on python:3.12-slim and is 40% smaller.
+Health checks moved from /health to /healthz.
+
+v2.2.0 (2026-01-12)
+Breaking: Python 3.9 is no longer supported. The minimum version is now 3.10.
+Added the --dry-run flag to the ingest command; it reports what would change without writing anything.
+
+v2.1.0 (2025-11-03)
+The API rate limit was raised from 30 to 60 requests per minute per key.
+Rate-limited responses now include a Retry-After header with the number of seconds to wait.
+
+v2.0.0 (2025-09-15)
+First public release of the 2.x line. Configuration moved from config.ini to environment variables.
+Support for the legacy XML export was removed; use the JSON export instead.
