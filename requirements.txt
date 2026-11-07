@@ -1,0 +1,11 @@
+anthropic
+python-dotenv
+rich
+pytest
+fastapi
+uvicorn
+mcp
+chromadb
+sentence-transformers
+rank-bm25
+pypdf
