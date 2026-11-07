@@ -49,7 +49,7 @@ class Agent:
 
     def run(self, user_input: str) -> str:
         self.messages.append({"role": "user", "content": user_input})
-        system = build_system_prompt(self.config, self.memory.recent(self.config.memory_recent_in_prompt))
+        system = build_system_prompt(self.config, self._recalled(user_input))
         tools = self.tool_schemas()
         budget = TokenBudget(self.config.max_total_tokens)
 
@@ -79,6 +79,13 @@ class Agent:
         # Close the turn so the next user message doesn't follow a tool_result directly.
         self.messages.append({"role": "assistant", "content": answer})
         return answer
+
+    def _recalled(self, user_input: str) -> list[dict]:
+        """Memories that match this message, then the newest few, without repeats."""
+        matches = self.memory.search(user_input, self.config.memory_recall_in_prompt)
+        recent = self.memory.recent(self.config.memory_recent_in_prompt)
+        seen = {e["id"] for e in matches}
+        return matches + [e for e in recent if e["id"] not in seen]
 
     def tool_schemas(self) -> list:
         tools = self.registry.schemas()

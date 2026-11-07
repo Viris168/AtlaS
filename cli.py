@@ -1,8 +1,9 @@
-"""Command-line REPL for Atlas (Milestone 1, polished in Milestone 11)."""
+"""Command-line REPL for Atlas (Milestone 1, slash commands from Milestone 5, polished in Milestone 11)."""
 import sys
 
 from agent.config import config
 from agent.loop import Agent
+from agent.tools.memory_tools import render_entries
 
 EXIT_WORDS = {"exit", "quit"}
 
@@ -28,6 +29,22 @@ def ask_approval(name: str, args: dict) -> str:
         return "n"
 
 
+def show_memory(agent: Agent) -> None:
+    entries = agent.memory.entries
+    if not entries:
+        print("  (no memories saved)")
+        return
+    print(f"  {len(entries)} memories:")
+    for line in render_entries(entries).splitlines():
+        print(f"    {line}")
+
+
+# Slash commands run here, never reach the model. Milestone 11 adds /help, /tools, /cost and the rest.
+COMMANDS = {
+    "/memory": show_memory,
+}
+
+
 def main() -> int:
     try:
         agent = Agent(config, on_tool_call=show_tool_call, ask_approval=ask_approval, on_todo_change=show_todos)
@@ -47,6 +64,13 @@ def main() -> int:
             continue
         if user_input.lower() in EXIT_WORDS:
             return 0
+        if user_input.startswith("/"):
+            command = COMMANDS.get(user_input.split()[0].lower())
+            if command:
+                command(agent)
+            else:
+                print(f"  Unknown command. Available: {', '.join(COMMANDS)}")
+            continue
 
         checkpoint = len(agent.messages)
         try:

@@ -53,6 +53,7 @@ class Config:
 
     # Long-term memory (M5)
     memory_recent_in_prompt: int = field(default_factory=lambda: _env("AGENT_MEMORY_RECENT", 3, int))
+    memory_recall_in_prompt: int = field(default_factory=lambda: _env("AGENT_MEMORY_RECALL", 5, int))
 
     # Subagents (M7)
     max_subagent_depth: int = field(default_factory=lambda: _env("AGENT_MAX_SUBAGENT_DEPTH", 1, int))
