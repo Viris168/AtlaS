@@ -8,3 +8,6 @@ logs/*
 workspace/*
 !*/.gitkeep
 evals/results/
+# Fetched by scripts/fetch_docs.py
+knowledge/fastapi/
+knowledge/chromadb/
