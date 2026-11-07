@@ -350,3 +350,87 @@ def test_bm25_still_scores_words_found_in_half_the_chunks(kb):
     (root / "b.md").write_text("## B\nbilling details " + words(20, "x"))
     run()
     assert [s.chunk.source for s in store.bm25_search("restart", 5)] == ["a.md"]
+
+
+# --- Retriever ---------------------------------------------------------------------
+
+from agent.rag.chunking import Chunk  # noqa: E402
+from agent.rag.retriever import Retriever, rrf_fuse  # noqa: E402
+from agent.rag.store import Scored  # noqa: E402
+
+
+def scored(*ids: str) -> list[Scored]:
+    return [Scored(Chunk(i, "f.md", "F", "", "", f"text {i}", 5), 0.0) for i in ids]
+
+
+def test_rrf_adds_one_over_k_plus_rank_from_each_list():
+    hits = rrf_fuse([scored("a", "b", "c"), scored("c", "a")], k=60)
+    assert [h.id for h in hits] == ["a", "c", "b"]
+    assert hits[0].score == pytest.approx(1 / 61 + 1 / 62)  # a: rank 1 and rank 2
+    assert hits[1].score == pytest.approx(1 / 63 + 1 / 61)  # c: rank 3 and rank 1
+    assert hits[2].score == pytest.approx(1 / 62)  # b: only in the first list
+
+
+def test_rrf_with_nothing_found():
+    assert rrf_fuse([[], []]) == []
+
+
+class FakeReranker:
+    """Prefers texts containing a chosen word."""
+
+    def __init__(self, word: str):
+        self.word = word
+        self.seen: list[str] = []
+
+    def score(self, query, texts):
+        self.seen = texts
+        return [1.0 if self.word in text else 0.0 for text in texts]
+
+
+@pytest.fixture
+def docs_kb(kb):
+    root, store, run = kb
+    (root / "db.md").write_text("# DB\n\n## Collections\nUse get_or_create_collection to open the vector database. " + words(20))
+    (root / "pay.md").write_text("# Pay\n\n## Billing\nInvoices are sent monthly to the billing contact. " + words(20, "x"))
+    (root / "ops.md").write_text("# Ops\n\n## Errors\nHTTP 429 means you hit the rate limit; wait and retry. " + words(20, "y"))
+    run()
+    return store
+
+
+def test_hybrid_finds_both_meaning_and_exact_terms(docs_kb):
+    retriever = Retriever(docs_kb, candidates=20)
+    assert retriever.search("monthly invoices billing", k=1)[0].source == "pay.md"
+    assert retriever.search("429", k=1)[0].source == "ops.md"
+    hit = retriever.search("get_or_create_collection", k=1)[0]
+    assert (hit.id, hit.heading_path, hit.page) == ("db.md#0", "DB > Collections", None)
+
+
+def test_search_modes_and_k(docs_kb):
+    retriever = Retriever(docs_kb)
+    assert len(retriever.search("database", k=2)) == 2
+    assert [h.source for h in retriever.search("429", k=3, mode="bm25")] == ["ops.md"]  # only keyword matches
+    assert len(retriever.search("429", k=3, mode="vector")) == 3  # vector always returns the nearest
+    assert retriever.search("   ", k=3) == [] and retriever.search("x", k=0) == []
+    with pytest.raises(ValueError, match="unknown search mode"):
+        retriever.search("x", mode="fuzzy")
+
+
+def test_reranker_reorders_and_sees_heading_paths(docs_kb):
+    reranker = FakeReranker("Invoices")
+    hits = Retriever(docs_kb, reranker=reranker).search("database collection", k=2)
+    assert hits[0].source == "pay.md" and hits[0].score == 1.0
+    assert any(text.startswith("Pay > Billing\n\n") for text in reranker.seen)
+
+
+def test_reranker_is_off_by_default_and_on_from_config(tmp_path, docs_kb):
+    from agent.config import Config
+    from agent.rag.retriever import CrossEncoderReranker
+
+    config = Config(data_dir=tmp_path / "d", workspace=tmp_path / "w", log_dir=tmp_path / "l", knowledge_dir=tmp_path / "k")
+    assert Retriever.from_config(config, docs_kb).reranker is None
+    config.rag_rerank = True
+    assert isinstance(Retriever.from_config(config, docs_kb).reranker, CrossEncoderReranker)  # model not loaded yet
+
+
+def test_empty_store_finds_nothing(tmp_path):
+    assert Retriever(KnowledgeStore(tmp_path / "index", FakeEmbedder())).search("anything") == []
