@@ -1,4 +1,5 @@
 """Command-line REPL for Atlas (Milestone 1, slash commands from Milestones 5, 5B, 6 and 8, subagents from 7, polished in Milestone 11)."""
+import re
 import sys
 
 from agent.config import config
@@ -62,6 +63,16 @@ def show_context(agent: Agent) -> None:
     print(f"  History summarized: {agent.context.summaries} times")
 
 
+def show_tools(agent: Agent) -> None:
+    tools = agent.tool_schemas()
+    print(f"  {len(tools)} tools (* asks for approval first):")
+    for tool in tools:
+        risky = "*" if agent.registry.is_risky(tool["name"]) else " "
+        # First sentence only; a sentence starts with a capital, so "e.g. 3" doesn't cut it short.
+        summary = re.split(r"\.\s+(?=[A-Z])", tool.get("description", "runs on the provider's side"))[0].rstrip(".")
+        print(f"   {risky} {tool['name']}: {summary[:90]}")
+
+
 def show_mcp(agent: Agent) -> None:
     rows = agent.mcp.status() if agent.mcp else []
     if not rows:
@@ -76,6 +87,7 @@ COMMANDS = {
     "/memory": show_memory,
     "/ingest": ingest_knowledge,
     "/context": show_context,
+    "/tools": show_tools,
     "/mcp": show_mcp,
 }
 

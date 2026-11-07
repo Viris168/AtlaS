@@ -33,3 +33,15 @@ def test_context_command_shows_size_and_counts(tmp_path, capsys):
     out = capsys.readouterr().out
     assert "5 of 200,000 characters" in out and "1 messages" in out
     assert "cleared: 2 times" in out and "summarized: 0 times" in out
+
+
+def test_tools_command_lists_tools_and_marks_risky_ones(tmp_path, capsys):
+    cli.COMMANDS["/tools"](make_agent(tmp_path, FakeLLM()))
+    out = capsys.readouterr().out
+    assert "13 tools" in out
+    assert "* write_file:" in out and "  read_file:" in out and "web_search:" in out
+
+
+def test_mcp_command_without_servers(tmp_path, capsys):
+    cli.COMMANDS["/mcp"](make_agent(tmp_path, FakeLLM()))
+    assert "no MCP servers configured" in capsys.readouterr().out
