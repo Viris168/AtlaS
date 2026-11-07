@@ -1,36 +1,47 @@
-{"question": "What problem does this protocol solve for AI assistants?", "source": "MCP_Documentation.md", "section": ""}
-{"question": "Which package do I pip install to get started?", "source": "MCP_Documentation.md", "section": "Installation"}
-{"question": "Will this work on Python 3.8?", "source": "MCP_Documentation.md", "section": "Installation"}
-{"question": "How does a client talk to a server running as a local process on the same machine?", "source": "MCP_Documentation.md", "section": "Server Setup", "subsection": "Transports"}
-{"question": "Can a server be reached over the network, and over what protocol?", "source": "MCP_Documentation.md", "section": "Server Setup", "subsection": "Transports"}
-{"question": "What kind of credentials do clients present to a hosted server?", "source": "MCP_Documentation.md", "section": "Server Setup", "subsection": "Authentication"}
-{"question": "Which environment variable holds the access token?", "source": "MCP_Documentation.md", "section": "Server Setup", "subsection": "Authentication"}
-{"question": "How do I expose a Python function so the assistant can call it?", "source": "MCP_Documentation.md", "section": "Server Setup", "subsection": "Tool Registration"}
-{"question": "What fields does every tool have to define?", "source": "MCP_Documentation.md", "section": "Server Setup", "subsection": "Tool Registration"}
-{"question": "My client says 'Method not found'. What is wrong?", "source": "MCP_Documentation.md", "section": "Troubleshooting"}
-{"question": "The server rejects a call even though I think the tool exists. What should I check?", "source": "MCP_Documentation.md", "section": "Troubleshooting"}
-{"question": "Which database stores the chunks?", "source": "DOCUMENTATION.md", "section": "Vector Store"}
-{"question": "How do I open the database without deleting what is already stored?", "source": "DOCUMENTATION.md", "section": "Vector Store"}
-{"question": "How fast can I call the API before I get throttled?", "source": "DOCUMENTATION.md", "section": "Rate Limits"}
-{"question": "I keep getting 'too many requests' errors. What should my client do?", "source": "DOCUMENTATION.md", "section": "Rate Limits"}
-{"question": "Is the request limit per user or per key?", "source": "DOCUMENTATION.md", "section": "Rate Limits"}
-{"question": "How do I build the container image?", "source": "DOCUMENTATION.md", "section": "Deployment"}
-{"question": "Which port does the container listen on?", "source": "DOCUMENTATION.md", "section": "Deployment"}
-{"question": "How do I run the assistant in a container?", "source": "DOCUMENTATION.md", "section": "Deployment"}
-{"question": "How do I authenticate requests to the billing API?", "source": "api_reference.md", "section": "Authentication"}
-{"question": "How often do I have to rotate my API key?", "source": "api_reference.md", "section": "Authentication"}
-{"question": "What does quota_exceeded mean?", "source": "api_reference.md", "section": "Errors", "subsection": "Error codes"}
-{"question": "Does creating more keys give me a higher hourly limit?", "source": "api_reference.md", "section": "Errors", "subsection": "Quotas"}
-{"question": "How do I get the next page of invoices?", "source": "api_reference.md", "section": "Pagination"}
-{"question": "How can I make sure retrying a POST doesn't charge the customer twice?", "source": "api_reference.md", "section": "Idempotency"}
-{"question": "How do I verify that a webhook really came from you?", "source": "api_reference.md", "section": "Webhooks", "subsection": "Signing"}
-{"question": "What happens if my webhook endpoint keeps timing out?", "source": "api_reference.md", "section": "Webhooks", "subsection": "Delivery and retries"}
-{"question": "Who carries the pager if the primary doesn't respond?", "source": "oncall_handbook.html", "section": "Rotation"}
-{"question": "How fast must a SEV2 be acknowledged?", "source": "oncall_handbook.html", "section": "Severity levels"}
-{"question": "When should I involve the security lead?", "source": "oncall_handbook.html", "section": "Escalation"}
-{"question": "Can I ship a hotfix on December 24?", "source": "oncall_handbook.html", "section": "Deploy freeze", "subsection": "Exceptions"}
-{"question": "Are config changes allowed on a Friday evening?", "source": "oncall_handbook.html", "section": "Deploy freeze", "subsection": "Freeze windows"}
-{"question": "How soon after an outage is the postmortem due?", "source": "oncall_handbook.html", "section": "After an incident"}
-{"question": "Which port does the container use after upgrading to 2.3?", "source": "release_notes.txt", "contains": "9000"}
-{"question": "Where did the health check endpoint move?", "source": "release_notes.txt", "contains": "/healthz"}
-{"question": "Which release dropped Python 3.9?", "source": "release_notes.txt", "contains": "Python 3.9 is no longer supported"}
+{"question": "What problem does this protocol solve for AI assistants?", "query": "MCP protocol purpose AI assistants", "source": "MCP_Documentation.md", "section": ""}
+{"question": "Which package do I pip install to get started?", "query": "MCP installation pip package", "source": "MCP_Documentation.md", "section": "Installation"}
+{"question": "Will this work on Python 3.8?", "query": "MCP installation Python version 3.8", "source": "MCP_Documentation.md", "section": "Installation"}
+{"question": "How does a client talk to a server running as a local process on the same machine?", "query": "MCP server setup client local process", "source": "MCP_Documentation.md", "section": "Server Setup", "subsection": "Transports"}
+{"question": "Can a server be reached over the network, and over what protocol?", "query": "MCP server setup network protocol", "source": "MCP_Documentation.md", "section": "Server Setup", "subsection": "Transports"}
+{"question": "What kind of credentials do clients present to a hosted server?", "query": "MCP server setup client credentials hosted server", "source": "MCP_Documentation.md", "section": "Server Setup", "subsection": "Authentication"}
+{"question": "Which environment variable holds the access token?", "query": "MCP environment variable access token", "source": "MCP_Documentation.md", "section": "Server Setup", "subsection": "Authentication"}
+{"question": "How do I expose a Python function so the assistant can call it?", "query": "MCP server setup expose Python function assistant", "source": "MCP_Documentation.md", "section": "Server Setup", "subsection": "Tool Registration"}
+{"question": "What fields does every tool have to define?", "query": "MCP tool required fields", "source": "MCP_Documentation.md", "section": "Server Setup", "subsection": "Tool Registration"}
+{"question": "My client says 'Method not found'. What is wrong?", "query": "MCP troubleshooting Method not found", "source": "MCP_Documentation.md", "section": "Troubleshooting"}
+{"question": "The server rejects a call even though I think the tool exists. What should I check?", "query": "MCP troubleshooting server rejects tool call", "source": "MCP_Documentation.md", "section": "Troubleshooting"}
+{"question": "Which database stores the chunks?", "query": "vector store database chunks", "source": "DOCUMENTATION.md", "section": "Vector Store"}
+{"question": "How do I open the database without deleting what is already stored?", "query": "vector store open database without deleting stored data", "source": "DOCUMENTATION.md", "section": "Vector Store"}
+{"question": "How fast can I call the API before I get throttled?", "query": "API rate limits throttled", "source": "DOCUMENTATION.md", "section": "Rate Limits"}
+{"question": "I keep getting 'too many requests' errors. What should my client do?", "query": "too many requests error client", "source": "DOCUMENTATION.md", "section": "Rate Limits"}
+{"question": "Is the request limit per user or per key?", "query": "rate limits request limit per user per key", "source": "DOCUMENTATION.md", "section": "Rate Limits"}
+{"question": "How do I build the container image?", "query": "deployment build container image", "source": "DOCUMENTATION.md", "section": "Deployment"}
+{"question": "Which port does the container listen on?", "query": "deployment container port", "source": "DOCUMENTATION.md", "section": "Deployment"}
+{"question": "How do I run the assistant in a container?", "query": "deployment run assistant container", "source": "DOCUMENTATION.md", "section": "Deployment"}
+{"question": "How do I authenticate requests to the billing API?", "query": "billing API authentication requests", "source": "api_reference.md", "section": "Authentication"}
+{"question": "How often do I have to rotate my API key?", "query": "billing API key rotation", "source": "api_reference.md", "section": "Authentication"}
+{"question": "What does quota_exceeded mean?", "query": "quota_exceeded error", "source": "api_reference.md", "section": "Errors", "subsection": "Error codes", "kind": "exact"}
+{"question": "Does creating more keys give me a higher hourly limit?", "query": "billing API more keys hourly limit", "source": "api_reference.md", "section": "Errors", "subsection": "Quotas"}
+{"question": "How do I get the next page of invoices?", "query": "billing API pagination next page invoices", "source": "api_reference.md", "section": "Pagination"}
+{"question": "How can I make sure retrying a POST doesn't charge the customer twice?", "query": "billing API retry POST duplicate charge", "source": "api_reference.md", "section": "Idempotency"}
+{"question": "How do I verify that a webhook really came from you?", "query": "webhooks verify sender", "source": "api_reference.md", "section": "Webhooks", "subsection": "Signing"}
+{"question": "What happens if my webhook endpoint keeps timing out?", "query": "webhooks endpoint timing out", "source": "api_reference.md", "section": "Webhooks", "subsection": "Delivery and retries"}
+{"question": "Who carries the pager if the primary doesn't respond?", "query": "on-call rotation pager primary not responding", "source": "oncall_handbook.html", "section": "Rotation"}
+{"question": "How fast must a SEV2 be acknowledged?", "query": "severity levels SEV2 acknowledge time", "source": "oncall_handbook.html", "section": "Severity levels"}
+{"question": "When should I involve the security lead?", "query": "on-call escalation security lead", "source": "oncall_handbook.html", "section": "Escalation"}
+{"question": "Can I ship a hotfix on December 24?", "query": "deploy freeze hotfix December 24", "source": "oncall_handbook.html", "section": "Deploy freeze", "subsection": "Exceptions"}
+{"question": "Are config changes allowed on a Friday evening?", "query": "deploy freeze config changes Friday evening", "source": "oncall_handbook.html", "section": "Deploy freeze", "subsection": "Freeze windows"}
+{"question": "How soon after an outage is the postmortem due?", "query": "after an incident postmortem deadline", "source": "oncall_handbook.html", "section": "After an incident"}
+{"question": "Which port does the container use after upgrading to 2.3?", "query": "release notes 2.3 container port", "source": "release_notes.txt", "contains": "9000"}
+{"question": "Where did the health check endpoint move?", "query": "release notes health check endpoint", "source": "release_notes.txt", "contains": "/healthz"}
+{"question": "Which release dropped Python 3.9?", "query": "release notes Python 3.9 dropped", "source": "release_notes.txt", "contains": "Python 3.9 is no longer supported"}
+{"question": "What does error -32601 mean?", "query": "error -32601", "source": "MCP_Documentation.md", "section": "Troubleshooting", "kind": "exact"}
+{"question": "What is MCP_AUTH_TOKEN for?", "query": "MCP_AUTH_TOKEN", "source": "MCP_Documentation.md", "section": "Server Setup", "subsection": "Authentication", "kind": "exact"}
+{"question": "What is the @server.tool() decorator for?", "query": "@server.tool() decorator", "source": "MCP_Documentation.md", "section": "Server Setup", "subsection": "Tool Registration", "kind": "exact"}
+{"question": "What does get_or_create_collection do?", "query": "get_or_create_collection", "source": "DOCUMENTATION.md", "section": "Vector Store", "kind": "exact"}
+{"question": "How is the X-Signature header computed?", "query": "X-Signature header", "source": "api_reference.md", "section": "Webhooks", "subsection": "Signing", "kind": "exact"}
+{"question": "What does the X-Quota-Remaining header tell me?", "query": "X-Quota-Remaining header", "source": "api_reference.md", "section": "Errors", "subsection": "Quotas", "kind": "exact"}
+{"question": "What is next_cursor?", "query": "next_cursor", "source": "api_reference.md", "section": "Pagination", "kind": "exact"}
+{"question": "When do I get a 409 conflict?", "query": "409 conflict", "source": "api_reference.md", "section": "Errors", "subsection": "Error codes", "kind": "exact"}
+{"question": "What does the --dry-run flag do?", "query": "--dry-run flag", "source": "release_notes.txt", "contains": "--dry-run", "kind": "exact"}
+{"question": "What does stream=true do?", "query": "stream=true", "source": "release_notes.txt", "contains": "stream=true", "kind": "exact"}
+{"question": "What counts as a SEV1?", "query": "SEV1", "source": "oncall_handbook.html", "section": "Severity levels", "kind": "exact"}

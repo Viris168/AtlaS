@@ -173,6 +173,17 @@ def test_html_becomes_markdown_without_scripts_or_styles(tmp_path):
     assert "alert" not in doc.text and "color" not in doc.text
 
 
+def test_html_table_cells_stay_separate_words(tmp_path):
+    (tmp_path / "t.html").write_text(
+        "<h2>Levels</h2><table><tr><th>Level</th><th>Response</th></tr>"
+        "<tr><td>SEV1</td><td>Page within <b>5</b> minutes</td></tr></table><dl><dt>RTO</dt><dd>1 hour</dd></dl>"
+    )
+    [doc] = load_file(tmp_path / "t.html", tmp_path)
+    assert "Level | Response\n\nSEV1 | Page within 5 minutes" in doc.text
+    assert "RTO\n\n1 hour" in doc.text
+    assert not any(line.rstrip().endswith("|") for line in doc.text.splitlines())
+
+
 def test_pdf_has_one_document_per_page(tmp_path):
     make_pdf(tmp_path / "manual.pdf", ["First page text", "Second page text"])
     docs = load_file(tmp_path / "manual.pdf", tmp_path)

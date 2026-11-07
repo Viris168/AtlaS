@@ -5,11 +5,17 @@ evals/rag_questions.jsonl, where the chunk holding the answer ranks under each s
 setup. No LLM calls; it needs the embedding model (and the reranker, unless --no-rerank).
 
     python -m evals.rag_eval
-    python -m evals.rag_eval --no-rerank --k 5
+    python -m evals.rag_eval --no-rerank --k 5 --details
 
 Each question names where its answer lives: "source" (required), "section" (the ## heading,
 "" for text before the first one), "subsection" (a ### heading) and/or "contains" (a phrase
 the chunk must include, for files without headings).
+
+Every question is scored in two forms: as a person asks it ("question"), and as the agent
+would search for it ("query", keyword style). A query may use only words from the question
+plus what the agent sees in its prompt (file titles and ## headings), never words that
+appear only in the answer. "kind": "exact" marks questions built around an identifier,
+error code or flag, which is where keyword search should help most.
 """
 import argparse
 import json
@@ -39,6 +45,14 @@ class Question:
     section: str | None = None
     subsection: str | None = None
     contains: str | None = None
+    query: str | None = None  # the agent-style search; falls back to the question
+    kind: str = "natural"  # or "exact"
+
+    def text(self, form: str) -> str:
+        return self.query or self.question if form == "query" else self.question
+
+
+FORMS = {"asked": "as asked", "query": "as the agent searches"}  # natural-language question / keyword-style query
 
 
 def load_questions(path: Path) -> list[Question]:
@@ -85,8 +99,8 @@ class Score:
         return sum(1 / rank for rank in self.ranks if rank) / len(self.ranks)
 
 
-def score(search: Search, questions: list[Question], k: int) -> Score:
-    return Score([rank_of(q, search(q.question, k)) for q in questions])
+def score(search: Search, questions: list[Question], k: int, form: str = "asked") -> Score:
+    return Score([rank_of(q, search(q.text(form), k)) for q in questions])
 
 
 def build_index(docs: Path, index_dir: Path, embedder: Embedder, settings: ChunkSettings, embed_model: str) -> KnowledgeStore:
@@ -110,26 +124,44 @@ def setups(store: KnowledgeStore, config: Config, reranker: Reranker | None) -> 
     return rows
 
 
-def report(questions: list[Question], results: dict[str, Score], k: int, chunks: int) -> str:
-    names = list(results)
+def _table(title: str, results: dict[str, Score], k: int) -> list[str]:
     cutoffs = sorted({n for n in (1, 3, k) if n <= k})
-    lines = [
-        f"{len(questions)} questions, {chunks} chunks, top {k}",
-        "",
-        f"{'setup':15}" + "".join(f"{f'hit@{n}':>7}" for n in cutoffs) + f"{'MRR':>7}",
-    ]
+    lines = [title, f"{'setup':15}" + "".join(f"{f'hit@{n}':>7}" for n in cutoffs) + f"{'MRR':>7}"]
     for name, s in results.items():
         lines.append(f"{name:15}" + "".join(f"{s.hit_at(n):>7.0%}" for n in cutoffs) + f"{s.mrr:>7.2f}")
+    return lines
 
+
+def _subset(results: dict[str, Score], keep: list[int]) -> dict[str, Score]:
+    return {name: Score([s.ranks[i] for i in keep]) for name, s in results.items()}
+
+
+def _details(title: str, questions: list[Question], results: dict[str, Score], form: str, k: int) -> list[str]:
+    names = list(results)
     not_first = [i for i in range(len(questions)) if any(results[name].ranks[i] != 1 for name in names)]
-    if not_first:
-        lines += ["", f"Rank of the answer where any setup missed first place (- = not in top {k}):", ""]
-        lines.append(f"{'question':60} " + " ".join(f"{name:>13}" for name in names))
-        for i in not_first:
-            text = questions[i].question
-            text = text if len(text) <= 58 else text[:57] + "…"
-            ranks = (results[name].ranks[i] for name in names)
-            lines.append(f"{text:60} " + " ".join(f"{(str(r) if r else '-'):>13}" for r in ranks))
+    if not not_first:
+        return []
+    lines = ["", f"{title}: rank of the answer where any setup missed first place (- = not in top {k})"]
+    lines.append(f"{'':60} " + " ".join(f"{name:>13}" for name in names))
+    for i in not_first:
+        text = questions[i].text(form)
+        text = text if len(text) <= 58 else text[:57] + "…"
+        ranks = (results[name].ranks[i] for name in names)
+        lines.append(f"{text:60} " + " ".join(f"{(str(r) if r else '-'):>13}" for r in ranks))
+    return lines
+
+
+def report(questions: list[Question], by_form: dict[str, dict[str, Score]], k: int, chunks: int, details: bool = False) -> str:
+    exact = [i for i, q in enumerate(questions) if q.kind == "exact"]
+    lines = [f"{len(questions)} questions ({len(exact)} exact-term), {chunks} chunks, top {k}"]
+    for form, results in by_form.items():
+        lines += [""] + _table(FORMS[form].capitalize(), results, k)
+    if exact:
+        for form, results in by_form.items():
+            lines += [""] + _table(f"Exact-term questions only, {FORMS[form]}", _subset(results, exact), k)
+    if details:
+        for form, results in by_form.items():
+            lines += _details(FORMS[form].capitalize(), questions, results, form, k)
     return "\n".join(lines)
 
 
@@ -142,6 +174,7 @@ def run(
     settings: ChunkSettings | None = None,
     reranker: Reranker | None = None,
     rerank: bool = True,
+    details: bool = False,
 ) -> str:
     k = k or config.rag_top_k
     questions = load_questions(questions_path)
@@ -151,18 +184,20 @@ def run(
         reranker = CrossEncoderReranker(config.rag_rerank_model)
     with tempfile.TemporaryDirectory(prefix="atlas-rag-eval-") as tmp:
         store = build_index(docs, Path(tmp), embedder, settings, config.rag_embed_model)
-        results = {name: score(search, questions, k) for name, search in setups(store, config, reranker if rerank else None)}
-        return report(questions, results, k, store.count())
+        rows = setups(store, config, reranker if rerank else None)
+        by_form = {form: {name: score(search, questions, k, form) for name, search in rows} for form in FORMS}
+        return report(questions, by_form, k, store.count(), details)
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="python -m evals.rag_eval", description="Retrieval eval for the knowledge base.")
     parser.add_argument("--k", type=int, help=f"results per search (default: rag_top_k, {default_config.rag_top_k})")
     parser.add_argument("--no-rerank", action="store_true", help="skip the hybrid+rerank row (no cross-encoder download)")
+    parser.add_argument("--details", action="store_true", help="also show each question any setup didn't rank first")
     parser.add_argument("--docs", type=Path, default=DOCS, help="folder of documents to index")
     parser.add_argument("--questions", type=Path, default=QUESTIONS, help="JSONL file of questions")
     args = parser.parse_args(argv)
-    print(run(k=args.k, docs=args.docs, questions_path=args.questions, rerank=not args.no_rerank))
+    print(run(k=args.k, docs=args.docs, questions_path=args.questions, rerank=not args.no_rerank, details=args.details))
     return 0
 
 

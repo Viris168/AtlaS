@@ -63,15 +63,26 @@ def test_run_reports_every_setup(tmp_path):
     (docs / "ops.md").write_text("# Ops\n\n## Errors\nHTTP 429 means you hit the rate limit. " + words(20, "y"))
     questions = tmp_path / "q.jsonl"
     questions.write_text("\n".join(json.dumps(q) for q in [
-        {"question": "get_or_create_collection", "source": "db.md", "section": "Collections"},
+        {"question": "how do I open a collection", "query": "get_or_create_collection", "source": "db.md", "section": "Collections", "kind": "exact"},
         {"question": "what does 429 mean", "source": "ops.md", "section": "Errors"},
     ]))
     config = Config(data_dir=tmp_path / "d", workspace=tmp_path / "w", log_dir=tmp_path / "l", knowledge_dir=tmp_path / "k")
 
-    out = run(config, docs, questions, k=2, embedder=FakeEmbedder(), settings=SMALL, reranker=FakeReranker("Errors"))
-    assert out.startswith("2 questions, 2 chunks, top 2")
+    out = run(config, docs, questions, k=2, embedder=FakeEmbedder(), settings=SMALL,
+              reranker=FakeReranker("Errors"), details=True)
+    assert out.startswith("2 questions (1 exact-term), 2 chunks, top 2")
+    for title in ("As asked", "As the agent searches", "Exact-term questions only, as asked",
+                  "Exact-term questions only, as the agent searches"):
+        assert f"\n{title}\n" in out
     for name in ("vector", "bm25", "hybrid", "hybrid+rerank"):
         assert name in out
     assert "hit@3" not in out  # only cutoffs up to k
-    [hybrid_row] = [line for line in out.splitlines() if line.startswith("hybrid ")]
+    agent_table = out.split("As the agent searches\n")[1]
+    [hybrid_row] = [line for line in agent_table.splitlines() if line.startswith("hybrid ")][:1]
     assert hybrid_row.split() == ["hybrid", "100%", "100%", "1.00"]
+
+
+def test_query_form_falls_back_to_the_question():
+    assert Question("why?", "a.md").text("query") == "why?"
+    assert Question("why?", "a.md", query="reason").text("query") == "reason"
+    assert Question("why?", "a.md", query="reason").text("asked") == "why?"

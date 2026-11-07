@@ -30,7 +30,8 @@ class _HTMLToMarkdown(HTMLParser):
     """Keeps the visible text, turns h1-h3 into #-headings and block tags into blank lines,
     so HTML gets the same structure-based chunking as Markdown."""
 
-    BLOCK_TAGS = {"p", "div", "section", "article", "li", "tr", "br", "pre", "blockquote", "table", "ul", "ol", "h4", "h5", "h6"}
+    BLOCK_TAGS = {"p", "div", "section", "article", "li", "tr", "br", "pre", "blockquote", "table", "ul", "ol", "dl", "dt", "dd", "h4", "h5", "h6"}
+    CELL_TAGS = {"td", "th"}  # cells are inline in HTML, so without a separator a row reads "SEV1Checkout is down"
     SKIP_TAGS = {"script", "style", "noscript", "template", "svg", "head"}
     HEADINGS = {"h1": "# ", "h2": "## ", "h3": "### "}
 
@@ -58,16 +59,18 @@ class _HTMLToMarkdown(HTMLParser):
             self._skip = max(0, self._skip - 1)
         elif tag in self.HEADINGS or tag in self.BLOCK_TAGS:
             self.parts.append("\n\n")
+        elif tag in self.CELL_TAGS:
+            self.parts.append(" | ")
 
     def handle_data(self, data):
         if self._in_title:
             self.title += data
         elif not self._skip:
-            self.parts.append(" ".join(data.split()) if data.strip() else " ")
+            self.parts.append(re.sub(r"\s+", " ", data))  # keep edge spaces: "within <b>5</b> minutes"
 
     def markdown(self) -> str:
         text = "".join(self.parts)
-        text = re.sub(r"[ \t]+\n", "\n", text)
+        text = re.sub(r"[ \t|]+\n", "\n", text + "\n")  # also drops the separator after a row's last cell
         text = re.sub(r"\n[ \t]+", "\n", text)
         return re.sub(r"\n{3,}", "\n\n", text).strip()
 
