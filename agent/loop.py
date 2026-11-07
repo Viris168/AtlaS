@@ -1,4 +1,4 @@
-"""The Agent class and its run() loop (Milestones 1-6)."""
+"""The Agent class and its run() loop (Milestones 1-7)."""
 from agent.config import Config, config as default_config
 from agent.context import ContextManager, llm_summarizer
 from agent.guardrails import Approver, AskFn, TokenBudget
@@ -12,6 +12,7 @@ from agent.tools.knowledge import knowledge_tools, render_outline
 from agent.tools.memory_tools import memory_tools
 from agent.tools.registry import ToolRegistry
 from agent.tools.shell import shell_tool
+from agent.tools.subagent import delegate_tool
 from agent.tools.todo import TodoList, todo_tools
 from agent.tools.web import web_search_schema
 
@@ -41,26 +42,43 @@ class Agent:
         on_tool_call=None,
         ask_approval: AskFn | None = None,
         on_todo_change=None,
+        depth: int = 0,
+        subagent_llm: LLM | None = None,
     ):
         self.config = config
         self.llm = llm or LLM(config)
+        # How deep this agent is: 0 for the one the user talks to, 1 for its subagents, and so on.
+        self.depth = depth
+        self._subagent_llm = subagent_llm  # made on first delegate_task if not given (tests pass a fake)
         # Lives on the instance, not in the module, so each subagent (M7) gets its own plan.
         self.todos = TodoList(on_change=on_todo_change)  # on_todo_change(todo_list) after every todo_write
         # Unlike the todo list, memory is one file on disk shared by every agent and session.
         self.memory = Memory(config.memory_path)
         self.registry = registry or build_registry(config, self.todos, self.memory)
+        # Only offered while there's room to go one level deeper, so subagents can't spawn
+        # subagents forever. With the default max_subagent_depth=1, only the main agent gets it.
+        if registry is None and self.can_delegate:
+            self.registry.register(delegate_tool(self.delegate))
         self.messages: list = []
         self.total_tokens = 0
         self.on_tool_call = on_tool_call  # called as on_tool_call(name, args, result)
         self.approver = Approver(config.auto_approve, ask_approval)
         self.context = ContextManager(config.context_char_budget, config.keep_recent_messages, self._summarize)
         self._summarizer = None
+        self._budget: TokenBudget | None = None  # the current run's budget, so delegate() can add to it
+
+    @property
+    def can_delegate(self) -> bool:
+        return self.depth < self.config.max_subagent_depth
 
     def run(self, user_input: str) -> str:
         self.messages.append({"role": "user", "content": user_input})
-        system = build_system_prompt(self.config, self._recalled(user_input), self._knowledge_outline())
+        system = build_system_prompt(
+            self.config, self._recalled(user_input), self._knowledge_outline(),
+            can_delegate=self.can_delegate, is_subagent=self.depth > 0,
+        )
         tools = self.tool_schemas()
-        budget = TokenBudget(self.config.max_total_tokens)
+        budget = self._budget = TokenBudget(self.config.max_total_tokens)
 
         for _ in range(self.config.max_steps):
             # Checked before each call, so a turn that just ran tools still gets its results recorded.
@@ -90,6 +108,32 @@ class Agent:
         # Close the turn so the next user message doesn't follow a tool_result directly.
         self.messages.append({"role": "assistant", "content": answer})
         return answer
+
+    def delegate(self, task: str) -> str:
+        """Run `task` in a brand-new child Agent and return its final answer (the delegate_task tool)."""
+        if self._subagent_llm is None:
+            self._subagent_llm = LLM(self.config, model=self.config.subagent_model)  # cheaper, faster model
+        child = Agent(
+            self.config,
+            llm=self._subagent_llm,
+            on_tool_call=self._child_tool_call if self.on_tool_call else None,
+            depth=self.depth + 1,
+            subagent_llm=self._subagent_llm,
+        )
+        # Share the approver, so the user still approves the child's risky tools,
+        # and an "always" they gave the main agent also covers the child.
+        child.approver = self.approver
+        answer = child.run(task)
+
+        # The child's tokens are real spending: count them in this agent's totals and this run's budget.
+        self.total_tokens += child.total_tokens
+        if self._budget is not None:
+            self._budget.used += child.total_tokens
+        return answer
+
+    def _child_tool_call(self, name, args, result) -> None:
+        """Pass the child's tool calls up to our listener, marked so the CLI can tell them apart."""
+        self.on_tool_call(f"subagent > {name}", args, result)
 
     def _summarize(self, transcript: str) -> str:
         """Made on first use: most sessions never need it, and tests never build a second client."""

@@ -1,4 +1,4 @@
-"""Command-line REPL for Atlas (Milestone 1, slash commands from Milestones 5, 5B and 6, polished in Milestone 11)."""
+"""Command-line REPL for Atlas (Milestone 1, slash commands from Milestones 5, 5B and 6, subagents from 7, polished in Milestone 11)."""
 import sys
 
 from agent.config import config
@@ -10,8 +10,9 @@ EXIT_WORDS = {"exit", "quit"}
 
 
 def show_tool_call(name: str, args: dict, result: str) -> None:
-    if name.startswith("todo_"):
-        return  # show_todos already prints the plan in a readable form
+    # A subagent's calls arrive as "subagent > read_file". Its plan is its own business, so skip todos at any level.
+    if name.split(" > ")[-1].startswith("todo_"):
+        return  # show_todos already prints the main agent's plan in a readable form
     preview = result if len(result) <= 200 else result[:200] + "..."
     print(f"  [tool] {name}({args}) -> {preview}")
 
