@@ -1,4 +1,4 @@
-"""The Agent class and its run() loop (Milestones 1-9, reset() from 11)."""
+"""The Agent class and its run() loop (Milestones 1-9; reset(), on_text and on_tool_start from 11)."""
 import time
 
 from agent.config import Config, config as default_config
@@ -53,6 +53,8 @@ class Agent:
         subagent_llm: LLM | None = None,
         mcp: MCPBridge | None = None,
         tracer: Tracer | NullTracer | None = None,
+        on_text=None,
+        on_tool_start=None,
     ):
         self.config = config
         self.llm = llm or LLM(config)
@@ -78,6 +80,10 @@ class Agent:
         self.run_id: str | None = None  # the current run, so every event can say which run it belongs to
         self.parent_run_id: str | None = None  # set on a subagent: the parent run that delegated to it
         self.on_tool_call = on_tool_call  # called as on_tool_call(name, args, result)
+        self.on_tool_start = on_tool_start  # called as on_tool_start(name, args) once a tool is cleared to run
+        # on_text(chunk) streams the model's text as it arrives (M11). Only this agent's own turns stream:
+        # subagents and summaries work out of sight, and only their results matter.
+        self.on_text = on_text
         self.approver = Approver(config.auto_approve, ask_approval)
         self.context = ContextManager(config.context_char_budget, config.keep_recent_messages, self._summarize)
         self._summarizer = None
@@ -166,7 +172,10 @@ class Agent:
     def _complete(self, llm, system: str, messages: list, tools: list | None = None, purpose: str = "agent"):
         """Every model call goes through here, so each one is timed, counted and traced the same way."""
         started = time.monotonic()
-        response = llm.complete(system, messages, tools)
+        if purpose == "agent" and self.on_text:
+            response = llm.complete(system, messages, tools, on_text=self.on_text)
+        else:
+            response = llm.complete(system, messages, tools)
         latency = time.monotonic() - started
 
         usage, model = response.usage, getattr(llm, "model", "unknown")
@@ -254,6 +263,8 @@ class Agent:
             # Tell the model, so it can try something else or ask the user, instead of retrying blindly.
             content, is_error = f"Denied: the user did not approve running '{block.name}'.", True
         else:
+            if self.on_tool_start:
+                self.on_tool_start(block.name, block.input)
             content, is_error = self.registry.run(block.name, block.input)
         self.tracer.event(
             "tool_call", self.run_id, name=block.name, args=block.input, approval=approval,

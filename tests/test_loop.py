@@ -23,9 +23,16 @@ class FakeLLM:
         self.replies = list(replies)
         self.tools_seen = None
 
-    def complete(self, system, messages, tools=None):
+    def complete(self, system, messages, tools=None, on_text=None):
         self.tools_seen = tools
-        return self.replies.pop(0)
+        response = self.replies.pop(0)
+        if on_text:  # "stream" each text block in two chunks, like the real LLM's on_text
+            for block in response.content:
+                if block.type == "text":
+                    half = len(block.text) // 2
+                    on_text(block.text[:half])
+                    on_text(block.text[half:])
+        return response
 
 
 def make_agent(tmp_path, llm, **overrides):

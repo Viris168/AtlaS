@@ -2,26 +2,36 @@
 
 Run it with `python server.py` (AGENT_HOST / AGENT_PORT) or `uvicorn server:app`.
 
-Each session is one Agent with its own history, plan and trace file, the same as one CLI run.
+Each session is one Agent with its own history, plan, trace file and workspace folder
+(AGENT_WORKSPACE/sessions/<session_id>), the same as one CLI run. Memory is shared, as in the CLI.
 A message streams back as Server-Sent Events while the agent works:
-  tool_call         {"name", "args", "result"}       a tool ran (result is a preview)
-  todos             {"items"}                         the plan changed
-  approval_request  {"approval_id", "name", "args"}   a risky tool is waiting: answer it with
-                                                      POST /sessions/{id}/approvals/{approval_id}
-  answer            {"text"}                          the final answer; the stream ends after it
-  error             {"error"}                         the turn failed and was rolled back; the stream ends
+  text               {"text"}                          a chunk of the model's text, as it arrives
+  tool_call          {"name", "args", "result"}        a tool ran (result is a preview)
+  todos              {"items"}                         the plan changed
+  approval_required  {"approval_id", "name", "args"}   a risky tool is waiting: answer it with
+                                                       POST /sessions/{id}/approvals/{approval_id}
+  answer             {"text"}                          the final answer; the stream ends after it
+  error              {"error"}                         the turn failed and was rolled back; the stream ends
 
 Endpoints (each needs "Authorization: Bearer <AGENT_API_TOKEN>" when that's set):
   GET    /health
   GET    /tools
   POST   /sessions                                  -> {"session_id"}
   GET    /sessions/{id}                             -> messages, context, tokens and cost
+  GET    /sessions/{id}/trace                       -> the session's trace events (Milestone 9's JSONL)
   DELETE /sessions/{id}
   POST   /sessions/{id}/reset
   POST   /sessions/{id}/messages                    {"message": "..."} -> text/event-stream
-  POST   /sessions/{id}/approvals/{approval_id}     {"decision": "y" | "n" | "a"}
+  POST   /sessions/{id}/approvals/{approval_id}     {"allow": true | false, "always": false}
+                                                   ("always" also allows this tool for the rest of the session)
+
+Try it with curl (-N shows events as they arrive):
+  curl -s -X POST localhost:8000/sessions
+  curl -N -X POST localhost:8000/sessions/<id>/messages -H 'Content-Type: application/json' -d '{"message": "..."}'
+  curl -X POST localhost:8000/sessions/<id>/approvals/<approval_id> -H 'Content-Type: application/json' -d '{"allow": true}'
 """
 import asyncio
+import dataclasses
 import json
 import secrets
 import threading
@@ -51,8 +61,14 @@ class MessageIn(BaseModel):
     message: str = Field(min_length=1)
 
 
-class DecisionIn(BaseModel):
-    decision: str = Field(pattern=r"^(?i:y|yes|n|no|a|always)$")
+class ApprovalIn(BaseModel):
+    allow: bool
+    always: bool = False  # only counts with allow: also allow this tool for the rest of the session
+
+    @property
+    def decision(self) -> str:
+        """In the Approver's terms (M3): "a" always, "y" yes, "n" no."""
+        return ("a" if self.always else "y") if self.allow else "n"
 
 
 @dataclass
@@ -77,6 +93,7 @@ class Session:
         self.busy = threading.Lock()  # one turn at a time: the history can't take two at once
         self.pending: dict[str, PendingApproval] = {}
         self._emit: Callable[[str, dict], None] | None = None  # set while a turn is streaming
+        agent.on_text = lambda chunk: self.emit("text", {"text": chunk})
         agent.on_tool_call = self._on_tool_call
         agent.todos.on_change = self._on_todos
         agent.approver.ask = self._ask
@@ -96,7 +113,7 @@ class Session:
         No answer in time (the client went away, say) counts as "no", so the safe default holds."""
         approval_id = new_id()
         pending = self.pending[approval_id] = PendingApproval(name, args)
-        self.emit("approval_request", {"approval_id": approval_id, "name": name, "args": args})
+        self.emit("approval_required", {"approval_id": approval_id, "name": name, "args": args})
         try:
             pending.answered.wait(self.approval_timeout)
             return pending.decision
@@ -126,6 +143,7 @@ class Session:
         agent, usage = self.agent, self.agent.usage
         return {
             "session_id": self.id,
+            "workspace": str(agent.config.workspace),
             "busy": self.busy.locked(),
             "messages": len(agent.messages),
             "context_chars": estimate_size(agent.messages),
@@ -136,6 +154,12 @@ class Session:
             "cost_usd": round(cost_usd(usage.input_tokens, usage.output_tokens, usage.cache_read_tokens, agent.config), 6),
             "pending_approvals": [{"approval_id": i, "name": p.name, "args": p.args} for i, p in self.pending.items()],
         }
+
+    def trace(self) -> list[dict]:
+        path = self.tracer.path
+        if not path.exists():
+            return []  # nothing has happened yet: the tracer only creates the file on the first event
+        return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
 
     def close(self) -> None:
         for pending in list(self.pending.values()):
@@ -204,8 +228,11 @@ def create_app(config: Config = default_config, make_agent: AgentFactory = defau
         if len(sessions) >= config.max_sessions:
             raise HTTPException(429, f"Session limit reached ({config.max_sessions}); delete one first")
         tracer = Tracer(config.log_dir, secrets=(config.api_key, config.api_token))
+        # Its own folder, so sessions can't read or overwrite each other's files. Kept after the session is
+        # deleted: it holds the user's work. (replace() makes the folder, in Config.__post_init__.)
+        session_config = dataclasses.replace(config, workspace=config.workspace / "sessions" / tracer.session_id)
         try:
-            agent = make_agent(config, tracer, state["mcp"])
+            agent = make_agent(session_config, tracer, state["mcp"])
         except RuntimeError as e:  # e.g. no API key configured
             tracer.close()
             raise HTTPException(500, str(e))
@@ -216,6 +243,10 @@ def create_app(config: Config = default_config, make_agent: AgentFactory = defau
     @app.get("/sessions/{session_id}")
     def session_info(session_id: str):
         return get_session(session_id).summary()
+
+    @app.get("/sessions/{session_id}/trace")
+    def session_trace(session_id: str):
+        return get_session(session_id).trace()
 
     @app.delete("/sessions/{session_id}", status_code=204)
     def delete_session(session_id: str):
@@ -236,8 +267,8 @@ def create_app(config: Config = default_config, make_agent: AgentFactory = defau
         return {"status": "reset"}
 
     @app.post("/sessions/{session_id}/approvals/{approval_id}")
-    def answer_approval(session_id: str, approval_id: str, body: DecisionIn):
-        if not get_session(session_id).answer(approval_id, body.decision.lower()):
+    def answer_approval(session_id: str, approval_id: str, body: ApprovalIn):
+        if not get_session(session_id).answer(approval_id, body.decision):
             raise HTTPException(404, f"No pending approval '{approval_id}'")
         return {"status": "answered"}
 

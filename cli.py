@@ -1,6 +1,17 @@
-"""Command-line REPL for Atlas (Milestone 1, slash commands from Milestones 5, 5B, 6, 8 and 9, subagents from 7, /help, /reset and /trace from 11)."""
+"""Command-line interface for Atlas (Milestone 1, slash commands from Milestones 5, 5B, 6, 8 and 9,
+subagents from 7, rich output, streaming, /help, /reset, /trace and one-shot mode from 11).
+
+    python cli.py                  # chat
+    python cli.py "one-shot task"  # run one task, print the answer to stdout, exit (1 on error)
+"""
 import re
 import sys
+
+from rich.console import Console
+from rich.live import Live
+from rich.markdown import Markdown
+from rich.spinner import Spinner
+from rich.text import Text
 
 from agent.config import config
 from agent.context import estimate_size
@@ -8,30 +19,88 @@ from agent.logging_utils import Tracer, cost_usd
 from agent.loop import Agent
 from agent.tools.mcp_bridge import MCPBridge
 from agent.tools.memory_tools import render_entries
+from agent.tools.todo import MARKS
 
 EXIT_WORDS = {"exit", "quit", "/exit", "/quit"}
+STATUS_STYLES = {"done": "green", "in_progress": "yellow", "pending": "dim"}
 
 
-def show_tool_call(name: str, args: dict, result: str) -> None:
-    # A subagent's calls arrive as "subagent > read_file". Its plan is its own business, so skip todos at any level.
-    if name.split(" > ")[-1].startswith("todo_"):
-        return  # show_todos already prints the main agent's plan in a readable form
-    preview = result if len(result) <= 200 else result[:200] + "..."
-    print(f"  [tool] {name}({args}) -> {preview}")
+class Display:
+    """What a turn shows: the model's text streamed as Markdown, a spinner while waiting, coloured tool calls.
 
+    rich runs one Live display at a time, so the spinner and the streaming text take turns, and both
+    stop before anything else is printed or the approval prompt reads from the keyboard.
+    With stream=False (one-shot mode) the text isn't shown here; the caller prints the answer.
+    """
 
-def show_todos(todos) -> None:
-    print("  [plan]")
-    for line in todos.render().splitlines():
-        print(f"    {line}")
+    def __init__(self, console: Console, stream: bool = True):
+        self.console, self.stream = console, stream
+        self._live: Live | None = None
+        self._text = ""  # the text segment streaming now: the model's text up to its next tool call
+        self._last_text = ""
 
+    def _stop(self) -> None:
+        if self._live is not None:
+            self._live.stop()
+            self._live = None
+        if self._text:
+            self._last_text, self._text = self._text, ""
 
-def ask_approval(name: str, args: dict) -> str:
-    print(f"  [approve?] {name}({args})")
-    try:
-        return input("  Run it? [y]es / [n]o / [a]lways for this tool: ")
-    except EOFError:
-        return "n"
+    def spin(self, label: str) -> None:
+        self._stop()
+        self._live = Live(Spinner("dots", Text(label, style="dim")), console=self.console, transient=True)
+        self._live.start()
+
+    def start_turn(self) -> None:
+        self._last_text = ""
+        self.spin("thinking...")
+
+    def text(self, chunk: str) -> None:
+        if not self._text:  # a new segment: replace the spinner with the text
+            self._stop()
+            self._live = Live(Markdown(""), console=self.console, refresh_per_second=10)
+            self._live.start()
+        self._text += chunk
+        self._live.update(Markdown(self._text))
+
+    def tool_start(self, name: str, args: dict) -> None:
+        self.spin(f"running {name}...")
+
+    def tool_call(self, name: str, args: dict, result: str) -> None:
+        # A subagent's calls arrive as "subagent > read_file". Its plan is its own business, so skip todos at any level.
+        if not name.split(" > ")[-1].startswith("todo_"):  # todos() already prints the main agent's plan
+            self._stop()
+            preview = result if len(result) <= 200 else result[:200] + "..."
+            line = Text("  ")
+            line.append("[tool] ", style="bold cyan")
+            line.append(name, style="cyan")
+            line.append(f"({args})", style="dim")
+            line.append(" -> ")
+            line.append(preview, style="red" if result.startswith(("Error", "Denied")) else "default")
+            self.console.print(line, soft_wrap=True)
+        self.spin("thinking...")  # the next model call starts right away
+
+    def todos(self, todos) -> None:
+        self._stop()
+        self.console.print(Text("  [plan]", style="bold magenta"))
+        for item in todos.items:
+            self.console.print(Text(f"    {MARKS[item['status']]} {item['id']}. {item['task']}",
+                                    style=STATUS_STYLES[item["status"]]))
+
+    def ask(self, name: str, args: dict) -> str:
+        self._stop()
+        self.console.print(Text.assemble(("  [approve?] ", "bold yellow"), (name, "yellow"), (f"({args})", "dim")), soft_wrap=True)
+        try:
+            return self.console.input("  Run it? [y]es / [n]o / [a]lways for this tool: ")
+        except EOFError:  # nobody at the keyboard (stdin closed or piped): the safe answer
+            return "n"
+
+    def end_turn(self, answer: str | None = None) -> None:
+        """Stop the live display. With an answer, print it unless it was just streamed (a step-limit or
+        budget message never is)."""
+        self._stop()
+        if answer is not None and self.stream and "".join(answer.split()) != "".join(self._last_text.split()):
+            self.console.print(Markdown(answer))
 
 
 def show_memory(agent: Agent) -> None:
@@ -145,13 +214,13 @@ COMMANDS = {
 }
 
 
-def start_mcp() -> MCPBridge | None:
+def start_mcp(quiet: bool = False) -> MCPBridge | None:
     try:
         bridge = MCPBridge.from_config(config)
     except ValueError as e:  # a broken mcp_servers.json: say so, but still start without MCP
         print(f"Warning: MCP disabled: {e}", file=sys.stderr)
         return None
-    if bridge.servers:
+    if bridge.servers and not quiet:
         print(f"Starting {len(bridge.servers)} MCP server(s)...")
     bridge.start()
     for name, state in bridge.status():
@@ -160,37 +229,71 @@ def start_mcp() -> MCPBridge | None:
     return bridge
 
 
-def main() -> int:
-    mcp = start_mcp()
+def main(argv: list[str] | None = None) -> int:
+    argv = sys.argv[1:] if argv is None else argv
+    one_shot = " ".join(argv).strip()
+    mcp = start_mcp(quiet=bool(one_shot))
     try:
-        return repl(mcp)
+        return run_session(mcp, one_shot)
     finally:
         if mcp:
             mcp.close()
 
 
-def repl(mcp: MCPBridge | None) -> int:
+def run_session(mcp: MCPBridge | None, one_shot: str = "") -> int:
     tracer = Tracer(config.log_dir, secrets=(config.api_key,))
     try:
-        return chat(mcp, tracer)
+        # One-shot: progress goes to stderr and only the answer to stdout, so `atlas "task" > out.md` works.
+        console = Console(stderr=True) if one_shot else Console()
+        display = Display(console, stream=not one_shot)
+        try:
+            agent = Agent(config, on_tool_call=display.tool_call, ask_approval=display.ask, on_todo_change=display.todos,
+                          on_tool_start=display.tool_start, on_text=display.text if display.stream else None,
+                          mcp=mcp, tracer=tracer)
+        except RuntimeError as e:
+            print(f"Error: {e}", file=sys.stderr)
+            return 1
+        if one_shot:
+            answer = run_turn(agent, display, one_shot)
+            if answer is None:
+                return 1
+            print(answer)
+            return 0
+        return chat(agent, display)
     finally:
         tracer.close()
         if tracer.path.exists():
             print(f"Trace saved to {tracer.path}", file=sys.stderr)
 
 
-def chat(mcp: MCPBridge | None, tracer: Tracer) -> int:
+def run_turn(agent: Agent, display: Display, user_input: str) -> str | None:
+    """One turn with the display running. Returns the answer, or None if it failed or was interrupted."""
+    # A copy, not an index: context management may rewrite earlier messages during the turn.
+    checkpoint = list(agent.messages)
+    display.start_turn()
     try:
-        agent = Agent(config, on_tool_call=show_tool_call, ask_approval=ask_approval, on_todo_change=show_todos,
-                      mcp=mcp, tracer=tracer)
-    except RuntimeError as e:
+        answer = agent.run(user_input)
+    except KeyboardInterrupt:
+        display.end_turn()
+        agent.messages[:] = checkpoint
+        print("\n(interrupted)", file=sys.stderr)
+        return None
+    except Exception as e:
+        # Roll back the half-finished turn so the history stays valid for the next message.
+        display.end_turn()
+        agent.messages[:] = checkpoint
         print(f"Error: {e}", file=sys.stderr)
-        return 1
+        return None
+    display.end_turn(answer)
+    return answer
 
-    print(f"Atlas ({config.model}). Type /help for commands, 'exit' or Ctrl+D to quit.")
+
+def chat(agent: Agent, display: Display) -> int:
+    console = display.console
+    console.print(f"[bold]Atlas[/] ({config.model}). Type /help for commands, 'exit' or Ctrl+D to quit.")
     while True:
         try:
-            user_input = input("\nyou> ").strip()
+            user_input = console.input("\n[bold green]you>[/] ").strip()
         except (EOFError, KeyboardInterrupt):
             print()
             return 0
@@ -207,21 +310,8 @@ def chat(mcp: MCPBridge | None, tracer: Tracer) -> int:
                 print("  Unknown command. Type /help to see them all.")
             continue
 
-        # A copy, not an index: context management may rewrite earlier messages during the turn.
-        checkpoint = list(agent.messages)
-        try:
-            answer = agent.run(user_input)
-        except KeyboardInterrupt:
-            agent.messages[:] = checkpoint
-            print("\n(interrupted)")
-            continue
-        except Exception as e:
-            # Roll back the half-finished turn so the history stays valid for the next message.
-            agent.messages[:] = checkpoint
-            print(f"Error: {e}", file=sys.stderr)
-            continue
-
-        print(f"\natlas> {answer}")
+        console.print("[bold blue]atlas>[/]")
+        run_turn(agent, display, user_input)
 
 
 if __name__ == "__main__":
