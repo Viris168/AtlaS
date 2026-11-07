@@ -132,6 +132,17 @@ class KnowledgeStore:
                 entry["pages"].add(meta["page"])
         return [{**entry, "pages": len(entry["pages"])} for _, entry in sorted(files.items())]
 
+    def outline(self) -> list[dict]:
+        """Each indexed file's title and ## section headings in document order, for the system prompt."""
+        stored = self.collection.get(include=["metadatas"])
+        rows = sorted(zip(stored["ids"], stored["metadatas"]), key=lambda row: (row[1]["source"], _position(row[0])))
+        files: dict[str, dict] = {}
+        for _, meta in rows:
+            entry = files.setdefault(meta["source"], {"source": meta["source"], "title": meta["title"], "sections": []})
+            if meta["section"] and meta["section"] not in entry["sections"]:
+                entry["sections"].append(meta["section"])
+        return list(files.values())
+
     def count(self) -> int:
         return self.collection.count()
 
@@ -187,6 +198,11 @@ def _metadata(chunk: Chunk, file_hash: str) -> dict:
     if chunk.page is not None:  # Chroma metadata can't hold None
         meta["page"] = chunk.page
     return meta
+
+
+def _position(chunk_id: str) -> int:
+    """The n in "source#n"."""
+    return int(chunk_id.rsplit("#", 1)[1])
 
 
 def _chunk(chunk_id: str, text: str, meta: dict) -> Chunk:

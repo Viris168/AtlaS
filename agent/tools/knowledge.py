@@ -46,6 +46,29 @@ def render_hits(query: str, hits: list[Hit], passage_chars: int) -> str:
     return "\n".join(lines).rstrip()
 
 
+def _short(text: str, limit: int = 60) -> str:
+    text = " ".join(text.split())
+    return text if len(text) <= limit else text[: limit - 1] + "…"
+
+
+def render_outline(outline: list[dict], max_chars: int = 2000, max_sections: int = 12) -> str:
+    """One line per file: 'path: Title (Section, Section, …)'. Capped, so a big knowledge base
+    can't bloat the system prompt; the rest is one list_sources call away."""
+    lines: list[str] = []
+    used = 0
+    for n, entry in enumerate(outline):
+        sections = [_short(s) for s in entry["sections"][:max_sections]]
+        if len(entry["sections"]) > max_sections:
+            sections.append(f"+{len(entry['sections']) - max_sections} more")
+        line = f"- {entry['source']}: {_short(entry['title'])}" + (f" ({', '.join(sections)})" if sections else "")
+        if used + len(line) > max_chars:
+            lines.append(f"- … and {len(outline) - n} more files (call list_sources to see them all)")
+            break
+        lines.append(line)
+        used += len(line) + 1
+    return "\n".join(lines)
+
+
 def knowledge_tools(get_retriever: Callable[[], Retriever], top_k: int = 8, passage_chars: int = 1000) -> list[Tool]:
     """search_knowledge and list_sources. Neither is risky: they only read the index."""
     opened: list[Retriever] = []

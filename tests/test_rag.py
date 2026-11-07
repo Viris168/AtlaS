@@ -533,3 +533,90 @@ def test_making_an_agent_loads_no_rag_libraries(tmp_path):
     )
     out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, check=True).stdout
     assert out.strip() == "[]"
+
+
+# --- Knowledge outline in the system prompt ------------------------------------------
+
+from agent.prompts import build_system_prompt  # noqa: E402
+from agent.tools.knowledge import render_outline  # noqa: E402
+
+
+def test_outline_lists_titles_and_sections_in_document_order(kb):
+    root, store, run = kb
+    (root / "b.md").write_text(f"# Beta\n\n## Zeta\n{words(30)}\n\n## Alpha\n{words(30)}\n\n## Zeta\n{words(30)}")
+    (root / "a.txt").write_text(words(20))
+    run()
+    assert store.outline() == [
+        {"source": "a.txt", "title": "a", "sections": []},
+        {"source": "b.md", "title": "Beta", "sections": ["Zeta", "Alpha"]},
+    ]
+    assert render_outline(store.outline()) == "- a.txt: a\n- b.md: Beta (Zeta, Alpha)"
+
+
+def test_outline_is_capped():
+    many_sections = [{"source": "big.md", "title": "Big", "sections": [f"S{i}" for i in range(15)]}]
+    assert render_outline(many_sections, max_sections=3) == "- big.md: Big (S0, S1, S2, +12 more)"
+    long_heading = [{"source": "x.md", "title": "T" * 100, "sections": []}]
+    assert render_outline(long_heading).endswith("T…") and len(render_outline(long_heading)) < 80
+    many_files = [{"source": f"f{i}.md", "title": f"File {i}", "sections": []} for i in range(100)]
+    text = render_outline(many_files, max_chars=200)
+    assert len(text) < 300 and text.endswith("more files (call list_sources to see them all)")
+
+
+def test_prompt_shows_the_knowledge_base_only_when_there_is_one(tmp_path):
+    from agent.config import Config
+
+    config = Config(data_dir=tmp_path / "d", workspace=tmp_path / "w", log_dir=tmp_path / "l", knowledge_dir=tmp_path / "k")
+    assert "## Your knowledge base" not in build_system_prompt(config)
+    prompt = build_system_prompt(config, knowledge="- a.md: Guide (Rate Limits)")
+    assert "## Your knowledge base" in prompt and "- a.md: Guide (Rate Limits)" in prompt
+    assert "not instructions" in prompt.split("## Your knowledge base")[1]
+
+
+class PromptSpy:
+    def __init__(self):
+        self.systems: list[str] = []
+
+    def complete(self, system, messages, tools=None):
+        from tests.test_loop import reply, text
+
+        self.systems.append(system)
+        return reply("end_turn", text("ok"))
+
+
+def test_agent_puts_the_outline_in_its_prompt_and_follows_ingest(tmp_path, monkeypatch):
+    from agent.rag import ingest as ingest_module
+    from tests.test_loop import make_agent
+
+    llm = PromptSpy()
+    agent = make_agent(tmp_path, llm)
+    store = KnowledgeStore(agent.config.rag_index_dir, FakeEmbedder())
+    monkeypatch.setattr(ingest_module, "_stores", {agent.config.rag_index_dir: store})
+
+    agent.run("hi")
+    assert "## Your knowledge base" not in llm.systems[-1]  # index exists but is empty
+
+    (agent.config.knowledge_dir / "ops.md").write_text(f"# Ops\n\n## Rate Limits\n{words(30)}")
+    ingest(agent.config.knowledge_dir, store, SMALL, "fake-model")
+    agent.run("what about HTTP 429?")
+    assert "- ops.md: Ops (Rate Limits)" in llm.systems[-1]
+
+
+def test_no_index_on_disk_means_no_outline_and_no_chroma(tmp_path):
+    code = (
+        "import sys\n"
+        "from pathlib import Path as P\n"
+        "from types import SimpleNamespace as NS\n"
+        "from agent.config import Config\n"
+        "from agent.loop import Agent\n"
+        "class LLM:\n"
+        "    def complete(self, system, messages, tools=None):\n"
+        "        assert '## Your knowledge base' not in system\n"
+        "        return NS(stop_reason='end_turn', content=[NS(type='text', text='ok')], usage=NS(input_tokens=1, output_tokens=1))\n"
+        f"c = Config(workspace=P({str(tmp_path)!r}), data_dir=P({str(tmp_path / 'd')!r}), "
+        f"log_dir=P({str(tmp_path / 'l')!r}), knowledge_dir=P({str(tmp_path / 'k')!r}))\n"
+        "Agent(c, llm=LLM()).run('hello')\n"
+        "print('chromadb' in sys.modules)\n"
+    )
+    out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, check=True).stdout
+    assert out.strip() == "False"

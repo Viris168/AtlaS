@@ -7,7 +7,7 @@ from agent.prompts import build_system_prompt
 from agent.rag.ingest import open_store
 from agent.rag.retriever import Retriever
 from agent.tools.files import file_tools
-from agent.tools.knowledge import knowledge_tools
+from agent.tools.knowledge import knowledge_tools, render_outline
 from agent.tools.memory_tools import memory_tools
 from agent.tools.registry import ToolRegistry
 from agent.tools.shell import shell_tool
@@ -55,7 +55,7 @@ class Agent:
 
     def run(self, user_input: str) -> str:
         self.messages.append({"role": "user", "content": user_input})
-        system = build_system_prompt(self.config, self._recalled(user_input))
+        system = build_system_prompt(self.config, self._recalled(user_input), self._knowledge_outline())
         tools = self.tool_schemas()
         budget = TokenBudget(self.config.max_total_tokens)
 
@@ -92,6 +92,17 @@ class Agent:
         recent = self.memory.recent(self.config.memory_recent_in_prompt)
         seen = {e["id"] for e in matches}
         return matches + [e for e in recent if e["id"] not in seen]
+
+    def _knowledge_outline(self) -> str:
+        """What's in the knowledge base, so the model knows which questions to search for.
+        Read fresh each turn, so it follows /ingest. Nothing ever ingested: skip it without loading Chroma."""
+        index_dir = self.config.rag_index_dir
+        if not index_dir.is_dir() or not any(index_dir.iterdir()):
+            return ""
+        try:
+            return render_outline(open_store(self.config).outline())
+        except Exception:
+            return ""  # a broken index shouldn't stop the turn; search_knowledge will report the error
 
     def tool_schemas(self) -> list:
         tools = self.registry.schemas()
