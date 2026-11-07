@@ -80,6 +80,15 @@ class Config:
     mcp_startup_timeout: float = field(default_factory=lambda: _env("AGENT_MCP_STARTUP_TIMEOUT", 30, float))
     mcp_call_timeout: float = field(default_factory=lambda: _env("AGENT_MCP_CALL_TIMEOUT", 120, float))
 
+    # Web API (M11)
+    server_host: str = field(default_factory=lambda: _env("AGENT_HOST", "127.0.0.1"))
+    server_port: int = field(default_factory=lambda: _env("AGENT_PORT", 8000, int))
+    # Empty: no auth, fine on localhost. Set it whenever the server is reachable from elsewhere.
+    api_token: str = field(default_factory=lambda: _env("AGENT_API_TOKEN", ""))
+    # How long a run waits for an answer to an approval request before treating it as "no".
+    approval_timeout: float = field(default_factory=lambda: _env("AGENT_APPROVAL_TIMEOUT", 300, float))
+    max_sessions: int = field(default_factory=lambda: _env("AGENT_MAX_SESSIONS", 20, int))
+
     # Paths
     workspace: Path = field(default_factory=lambda: Path(_env("AGENT_WORKSPACE", ROOT / "workspace")).resolve())
     data_dir: Path = field(default_factory=lambda: Path(_env("AGENT_DATA_DIR", ROOT / "data")).resolve())

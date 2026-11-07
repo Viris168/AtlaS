@@ -45,3 +45,28 @@ def test_tools_command_lists_tools_and_marks_risky_ones(tmp_path, capsys):
 def test_mcp_command_without_servers(tmp_path, capsys):
     cli.COMMANDS["/mcp"](make_agent(tmp_path, FakeLLM()))
     assert "no MCP servers configured" in capsys.readouterr().out
+
+
+def test_help_lists_every_command(tmp_path, capsys):
+    cli.COMMANDS["/help"](make_agent(tmp_path, FakeLLM()))
+    out = capsys.readouterr().out
+    for name in cli.COMMANDS:
+        assert name in out
+    assert "Start a new conversation" in out and "/exit" in out
+
+
+def test_reset_clears_history_plan_and_always_but_keeps_memory(tmp_path, capsys):
+    agent = make_agent(tmp_path, FakeLLM())
+    agent.messages.append({"role": "user", "content": "hello"})
+    agent.todos.write([{"id": "1", "task": "x", "status": "pending"}])
+    agent.approver.always.add("write_file")
+    agent.memory.add("User's name is Virak")
+    cli.COMMANDS["/reset"](agent)
+    assert agent.messages == [] and agent.todos.items == [] and agent.approver.always == set()
+    assert len(agent.memory.entries) == 1
+    assert "Conversation cleared" in capsys.readouterr().out
+
+
+def test_trace_command_without_a_trace(tmp_path, capsys):
+    cli.COMMANDS["/trace"](make_agent(tmp_path, FakeLLM()))
+    assert "Nothing traced yet" in capsys.readouterr().out

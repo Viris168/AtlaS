@@ -1,4 +1,4 @@
-"""Command-line REPL for Atlas (Milestone 1, slash commands from Milestones 5, 5B, 6, 8 and 9, subagents from 7, polished in Milestone 11)."""
+"""Command-line REPL for Atlas (Milestone 1, slash commands from Milestones 5, 5B, 6, 8 and 9, subagents from 7, /help, /reset and /trace from 11)."""
 import re
 import sys
 
@@ -9,7 +9,7 @@ from agent.loop import Agent
 from agent.tools.mcp_bridge import MCPBridge
 from agent.tools.memory_tools import render_entries
 
-EXIT_WORDS = {"exit", "quit"}
+EXIT_WORDS = {"exit", "quit", "/exit", "/quit"}
 
 
 def show_tool_call(name: str, args: dict, result: str) -> None:
@@ -35,6 +35,7 @@ def ask_approval(name: str, args: dict) -> str:
 
 
 def show_memory(agent: Agent) -> None:
+    """List every saved long-term memory."""
     entries = agent.memory.entries
     if not entries:
         print("  (no memories saved)")
@@ -45,6 +46,7 @@ def show_memory(agent: Agent) -> None:
 
 
 def ingest_knowledge(agent: Agent) -> None:
+    """Index the files in the knowledge folder."""
     from agent.rag.ingest import run_ingest  # loads the embedding model, so only when asked
 
     print(f"  Indexing {agent.config.knowledge_dir} ...")
@@ -58,6 +60,7 @@ def ingest_knowledge(agent: Agent) -> None:
 
 
 def show_context(agent: Agent) -> None:
+    """Show how full the context window is."""
     size, budget = estimate_size(agent.messages), agent.context.budget
     print(f"  {size:,} of {budget:,} characters ({size / budget:.0%}), {len(agent.messages)} messages")
     print(f"  Old tool output cleared: {agent.context.clears} times")
@@ -65,6 +68,7 @@ def show_context(agent: Agent) -> None:
 
 
 def show_tools(agent: Agent) -> None:
+    """List the tools the model can call."""
     tools = agent.tool_schemas()
     print(f"  {len(tools)} tools (* asks for approval first):")
     for tool in tools:
@@ -75,6 +79,7 @@ def show_tools(agent: Agent) -> None:
 
 
 def show_mcp(agent: Agent) -> None:
+    """Show the status of each MCP server."""
     rows = agent.mcp.status() if agent.mcp else []
     if not rows:
         print(f"  (no MCP servers configured; add them to {agent.config.mcp_config_path.name})")
@@ -84,6 +89,7 @@ def show_mcp(agent: Agent) -> None:
 
 
 def show_cost(agent: Agent) -> None:
+    """Show tokens used and the estimated cost so far."""
     config, usage = agent.config, agent.usage
     if not usage.by_model:
         print("  No model calls yet this session.")
@@ -101,14 +107,41 @@ def show_cost(agent: Agent) -> None:
         print(f"  Trace: {agent.tracer.path}")
 
 
-# Slash commands run here, never reach the model. Milestone 11 adds /help, /reset and the rest.
+def reset_conversation(agent: Agent) -> None:
+    """Start a new conversation; memories and /cost totals are kept."""
+    agent.reset()
+    print("  Conversation cleared. Memories are kept.")
+
+
+def show_trace(agent: Agent) -> None:
+    """Show where this session's trace file is."""
+    path = agent.tracer.path
+    if not path or not path.exists():
+        print("  Nothing traced yet this session.")
+        return
+    print(f"  {path}")
+    print(f"  View it with: python scripts/show_trace.py {path}")
+
+
+def show_help(agent: Agent) -> None:
+    """List these commands."""
+    print("  Commands (they run here and never reach the model):")
+    for name, command in COMMANDS.items():
+        print(f"    {name:<9} {command.__doc__.splitlines()[0]}")
+    print(f"    {'/exit':<9} Quit (or type 'exit', or press Ctrl+D).")
+
+
+# Slash commands run here, never reach the model. /help prints the first line of each docstring.
 COMMANDS = {
+    "/help": show_help,
+    "/reset": reset_conversation,
     "/memory": show_memory,
     "/ingest": ingest_knowledge,
     "/context": show_context,
     "/tools": show_tools,
     "/mcp": show_mcp,
     "/cost": show_cost,
+    "/trace": show_trace,
 }
 
 
@@ -154,7 +187,7 @@ def chat(mcp: MCPBridge | None, tracer: Tracer) -> int:
         print(f"Error: {e}", file=sys.stderr)
         return 1
 
-    print(f"Atlas ({config.model}). Type 'exit' or press Ctrl+D to quit.")
+    print(f"Atlas ({config.model}). Type /help for commands, 'exit' or Ctrl+D to quit.")
     while True:
         try:
             user_input = input("\nyou> ").strip()
@@ -171,7 +204,7 @@ def chat(mcp: MCPBridge | None, tracer: Tracer) -> int:
             if command:
                 command(agent)
             else:
-                print(f"  Unknown command. Available: {', '.join(COMMANDS)}")
+                print("  Unknown command. Type /help to see them all.")
             continue
 
         # A copy, not an index: context management may rewrite earlier messages during the turn.

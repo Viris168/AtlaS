@@ -1,4 +1,4 @@
-"""The Agent class and its run() loop (Milestones 1-9)."""
+"""The Agent class and its run() loop (Milestones 1-9, reset() from 11)."""
 import time
 
 from agent.config import Config, config as default_config
@@ -86,6 +86,14 @@ class Agent:
     @property
     def can_delegate(self) -> bool:
         return self.depth < self.config.max_subagent_depth
+
+    def reset(self) -> None:
+        """Start a fresh conversation (/reset, M11): history, plan and "always" approvals go.
+        Memory stays (it's meant to outlive conversations), and so does usage, so /cost still covers the session."""
+        self.messages.clear()
+        self.todos.items = []
+        self.approver.always.clear()
+        self.context.clears = self.context.summaries = 0
 
     def run(self, user_input: str) -> str:
         run_id = self.run_id = new_id()
