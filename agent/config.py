@@ -75,6 +75,11 @@ class Config:
     # Subagents (M7)
     max_subagent_depth: int = field(default_factory=lambda: _env("AGENT_MAX_SUBAGENT_DEPTH", 1, int))
 
+    # MCP servers (M8)
+    mcp_config_path: Path = field(default_factory=lambda: Path(_env("AGENT_MCP_CONFIG", ROOT / "mcp_servers.json")).resolve())
+    mcp_startup_timeout: float = field(default_factory=lambda: _env("AGENT_MCP_STARTUP_TIMEOUT", 30, float))
+    mcp_call_timeout: float = field(default_factory=lambda: _env("AGENT_MCP_CALL_TIMEOUT", 120, float))
+
     # Paths
     workspace: Path = field(default_factory=lambda: Path(_env("AGENT_WORKSPACE", ROOT / "workspace")).resolve())
     data_dir: Path = field(default_factory=lambda: Path(_env("AGENT_DATA_DIR", ROOT / "data")).resolve())

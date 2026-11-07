@@ -1,9 +1,10 @@
-"""Command-line REPL for Atlas (Milestone 1, slash commands from Milestones 5, 5B and 6, subagents from 7, polished in Milestone 11)."""
+"""Command-line REPL for Atlas (Milestone 1, slash commands from Milestones 5, 5B, 6 and 8, subagents from 7, polished in Milestone 11)."""
 import sys
 
 from agent.config import config
 from agent.context import estimate_size
 from agent.loop import Agent
+from agent.tools.mcp_bridge import MCPBridge
 from agent.tools.memory_tools import render_entries
 
 EXIT_WORDS = {"exit", "quit"}
@@ -61,17 +62,51 @@ def show_context(agent: Agent) -> None:
     print(f"  History summarized: {agent.context.summaries} times")
 
 
+def show_mcp(agent: Agent) -> None:
+    rows = agent.mcp.status() if agent.mcp else []
+    if not rows:
+        print(f"  (no MCP servers configured; add them to {agent.config.mcp_config_path.name})")
+        return
+    for name, state in rows:
+        print(f"    {name}: {state}")
+
+
 # Slash commands run here, never reach the model. Milestone 11 adds /help, /tools, /cost and the rest.
 COMMANDS = {
     "/memory": show_memory,
     "/ingest": ingest_knowledge,
     "/context": show_context,
+    "/mcp": show_mcp,
 }
 
 
-def main() -> int:
+def start_mcp() -> MCPBridge | None:
     try:
-        agent = Agent(config, on_tool_call=show_tool_call, ask_approval=ask_approval, on_todo_change=show_todos)
+        bridge = MCPBridge.from_config(config)
+    except ValueError as e:  # a broken mcp_servers.json: say so, but still start without MCP
+        print(f"Warning: MCP disabled: {e}", file=sys.stderr)
+        return None
+    if bridge.servers:
+        print(f"Starting {len(bridge.servers)} MCP server(s)...")
+    bridge.start()
+    for name, state in bridge.status():
+        if state.startswith("failed"):
+            print(f"Warning: MCP server '{name}' {state}", file=sys.stderr)
+    return bridge
+
+
+def main() -> int:
+    mcp = start_mcp()
+    try:
+        return repl(mcp)
+    finally:
+        if mcp:
+            mcp.close()
+
+
+def repl(mcp: MCPBridge | None) -> int:
+    try:
+        agent = Agent(config, on_tool_call=show_tool_call, ask_approval=ask_approval, on_todo_change=show_todos, mcp=mcp)
     except RuntimeError as e:
         print(f"Error: {e}", file=sys.stderr)
         return 1

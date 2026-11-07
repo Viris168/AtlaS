@@ -1,4 +1,4 @@
-"""The Agent class and its run() loop (Milestones 1-7)."""
+"""The Agent class and its run() loop (Milestones 1-8)."""
 from agent.config import Config, config as default_config
 from agent.context import ContextManager, llm_summarizer
 from agent.guardrails import Approver, AskFn, TokenBudget
@@ -9,6 +9,7 @@ from agent.rag.ingest import open_store
 from agent.rag.retriever import Retriever
 from agent.tools.files import file_tools
 from agent.tools.knowledge import knowledge_tools, render_outline
+from agent.tools.mcp_bridge import MCPBridge
 from agent.tools.memory_tools import memory_tools
 from agent.tools.registry import ToolRegistry
 from agent.tools.shell import shell_tool
@@ -17,7 +18,7 @@ from agent.tools.todo import TodoList, todo_tools
 from agent.tools.web import web_search_schema
 
 
-def build_registry(config: Config, todos: TodoList, memory: Memory) -> ToolRegistry:
+def build_registry(config: Config, todos: TodoList, memory: Memory, mcp: MCPBridge | None = None) -> ToolRegistry:
     """Every tool that runs on our side. Later milestones register more tools here."""
     registry = ToolRegistry(max_output_chars=config.max_tool_output_chars)
     for tool in file_tools(config.workspace):
@@ -30,6 +31,9 @@ def build_registry(config: Config, todos: TodoList, memory: Memory) -> ToolRegis
     # Opened on the first search, not here: Chroma and the embedding model are slow to load.
     for tool in knowledge_tools(lambda: Retriever.from_config(config, open_store(config)), config.rag_top_k, config.rag_passage_chars):
         registry.register(tool)
+    if mcp is not None:
+        for tool in mcp.tools():
+            registry.register(tool)
     return registry
 
 
@@ -44,6 +48,7 @@ class Agent:
         on_todo_change=None,
         depth: int = 0,
         subagent_llm: LLM | None = None,
+        mcp: MCPBridge | None = None,
     ):
         self.config = config
         self.llm = llm or LLM(config)
@@ -54,7 +59,9 @@ class Agent:
         self.todos = TodoList(on_change=on_todo_change)  # on_todo_change(todo_list) after every todo_write
         # Unlike the todo list, memory is one file on disk shared by every agent and session.
         self.memory = Memory(config.memory_path)
-        self.registry = registry or build_registry(config, self.todos, self.memory)
+        # Started by the caller (the CLI), not here: it launches server processes that must be shut down.
+        self.mcp = mcp
+        self.registry = registry or build_registry(config, self.todos, self.memory, mcp)
         # Only offered while there's room to go one level deeper, so subagents can't spawn
         # subagents forever. With the default max_subagent_depth=1, only the main agent gets it.
         if registry is None and self.can_delegate:
@@ -119,6 +126,7 @@ class Agent:
             on_tool_call=self._child_tool_call if self.on_tool_call else None,
             depth=self.depth + 1,
             subagent_llm=self._subagent_llm,
+            mcp=self.mcp,  # same server sessions, not a second copy of every server
         )
         # Share the approver, so the user still approves the child's risky tools,
         # and an "always" they gave the main agent also covers the child.
