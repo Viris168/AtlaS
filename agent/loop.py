@@ -1,22 +1,26 @@
-"""The Agent class and its run() loop (Milestones 1-4)."""
+"""The Agent class and its run() loop (Milestones 1-5)."""
 from agent.config import Config, config as default_config
 from agent.guardrails import Approver, AskFn, TokenBudget
 from agent.llm import LLM
+from agent.memory import Memory
 from agent.prompts import build_system_prompt
 from agent.tools.files import file_tools
+from agent.tools.memory_tools import memory_tools
 from agent.tools.registry import ToolRegistry
 from agent.tools.shell import shell_tool
 from agent.tools.todo import TodoList, todo_tools
 from agent.tools.web import web_search_schema
 
 
-def build_registry(config: Config, todos: TodoList) -> ToolRegistry:
+def build_registry(config: Config, todos: TodoList, memory: Memory) -> ToolRegistry:
     """Every tool that runs on our side. Later milestones register more tools here."""
     registry = ToolRegistry(max_output_chars=config.max_tool_output_chars)
     for tool in file_tools(config.workspace):
         registry.register(tool)
     registry.register(shell_tool(config.workspace, config.shell_timeout))
     for tool in todo_tools(todos):
+        registry.register(tool)
+    for tool in memory_tools(memory):
         registry.register(tool)
     return registry
 
@@ -35,7 +39,9 @@ class Agent:
         self.llm = llm or LLM(config)
         # Lives on the instance, not in the module, so each subagent (M7) gets its own plan.
         self.todos = TodoList(on_change=on_todo_change)  # on_todo_change(todo_list) after every todo_write
-        self.registry = registry or build_registry(config, self.todos)
+        # Unlike the todo list, memory is one file on disk shared by every agent and session.
+        self.memory = Memory(config.memory_path)
+        self.registry = registry or build_registry(config, self.todos, self.memory)
         self.messages: list = []
         self.total_tokens = 0
         self.on_tool_call = on_tool_call  # called as on_tool_call(name, args, result)
@@ -43,7 +49,7 @@ class Agent:
 
     def run(self, user_input: str) -> str:
         self.messages.append({"role": "user", "content": user_input})
-        system = build_system_prompt(self.config)
+        system = build_system_prompt(self.config, self.memory.recent(self.config.memory_recent_in_prompt))
         tools = self.tool_schemas()
         budget = TokenBudget(self.config.max_total_tokens)
 

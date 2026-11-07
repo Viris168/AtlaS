@@ -51,6 +51,9 @@ class Config:
     context_char_budget: int = field(default_factory=lambda: _env("AGENT_CONTEXT_CHARS", 200_000, int))
     keep_recent_messages: int = field(default_factory=lambda: _env("AGENT_KEEP_RECENT", 6, int))
 
+    # Long-term memory (M5)
+    memory_recent_in_prompt: int = field(default_factory=lambda: _env("AGENT_MEMORY_RECENT", 3, int))
+
     # Subagents (M7)
     max_subagent_depth: int = field(default_factory=lambda: _env("AGENT_MAX_SUBAGENT_DEPTH", 1, int))
 
@@ -63,6 +66,10 @@ class Config:
     # Pricing in USD per million tokens (M9). Placeholders: set DeepSeek's current prices.
     price_input_per_mtok: float = field(default_factory=lambda: _env("AGENT_PRICE_IN", 3.0, float))
     price_output_per_mtok: float = field(default_factory=lambda: _env("AGENT_PRICE_OUT", 15.0, float))
+
+    @property
+    def memory_path(self) -> Path:
+        return self.data_dir / "memory.json"
 
     def __post_init__(self):
         for path in (self.workspace, self.data_dir, self.log_dir, self.knowledge_dir):
