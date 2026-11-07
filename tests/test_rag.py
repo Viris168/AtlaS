@@ -433,14 +433,14 @@ def test_reranker_reorders_and_sees_heading_paths(docs_kb):
     assert any(text.startswith("Pay > Billing\n\n") for text in reranker.seen)
 
 
-def test_reranker_is_off_by_default_and_on_from_config(tmp_path, docs_kb):
+def test_reranker_is_on_by_default_and_can_be_turned_off(tmp_path, docs_kb):
     from agent.config import Config
     from agent.rag.retriever import CrossEncoderReranker
 
     config = Config(data_dir=tmp_path / "d", workspace=tmp_path / "w", log_dir=tmp_path / "l", knowledge_dir=tmp_path / "k")
-    assert Retriever.from_config(config, docs_kb).reranker is None
-    config.rag_rerank = True
     assert isinstance(Retriever.from_config(config, docs_kb).reranker, CrossEncoderReranker)  # model not loaded yet
+    config.rag_rerank = False
+    assert Retriever.from_config(config, docs_kb).reranker is None
 
 
 def test_empty_store_finds_nothing(tmp_path):
