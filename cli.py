@@ -1,7 +1,8 @@
-"""Command-line REPL for Atlas (Milestone 1, slash commands from Milestones 5 and 5B, polished in Milestone 11)."""
+"""Command-line REPL for Atlas (Milestone 1, slash commands from Milestones 5, 5B and 6, polished in Milestone 11)."""
 import sys
 
 from agent.config import config
+from agent.context import estimate_size
 from agent.loop import Agent
 from agent.tools.memory_tools import render_entries
 
@@ -52,10 +53,18 @@ def ingest_knowledge(agent: Agent) -> None:
         print(f"    {line}")
 
 
+def show_context(agent: Agent) -> None:
+    size, budget = estimate_size(agent.messages), agent.context.budget
+    print(f"  {size:,} of {budget:,} characters ({size / budget:.0%}), {len(agent.messages)} messages")
+    print(f"  Old tool output cleared: {agent.context.clears} times")
+    print(f"  History summarized: {agent.context.summaries} times")
+
+
 # Slash commands run here, never reach the model. Milestone 11 adds /help, /tools, /cost and the rest.
 COMMANDS = {
     "/memory": show_memory,
     "/ingest": ingest_knowledge,
+    "/context": show_context,
 }
 
 
@@ -86,16 +95,17 @@ def main() -> int:
                 print(f"  Unknown command. Available: {', '.join(COMMANDS)}")
             continue
 
-        checkpoint = len(agent.messages)
+        # A copy, not an index: context management may rewrite earlier messages during the turn.
+        checkpoint = list(agent.messages)
         try:
             answer = agent.run(user_input)
         except KeyboardInterrupt:
-            del agent.messages[checkpoint:]
+            agent.messages[:] = checkpoint
             print("\n(interrupted)")
             continue
         except Exception as e:
             # Roll back the half-finished turn so the history stays valid for the next message.
-            del agent.messages[checkpoint:]
+            agent.messages[:] = checkpoint
             print(f"Error: {e}", file=sys.stderr)
             continue
 

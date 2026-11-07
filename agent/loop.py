@@ -1,5 +1,6 @@
-"""The Agent class and its run() loop (Milestones 1-5B)."""
+"""The Agent class and its run() loop (Milestones 1-6)."""
 from agent.config import Config, config as default_config
+from agent.context import ContextManager, llm_summarizer
 from agent.guardrails import Approver, AskFn, TokenBudget
 from agent.llm import LLM
 from agent.memory import Memory
@@ -52,6 +53,8 @@ class Agent:
         self.total_tokens = 0
         self.on_tool_call = on_tool_call  # called as on_tool_call(name, args, result)
         self.approver = Approver(config.auto_approve, ask_approval)
+        self.context = ContextManager(config.context_char_budget, config.keep_recent_messages, self._summarize)
+        self._summarizer = None
 
     def run(self, user_input: str) -> str:
         self.messages.append({"role": "user", "content": user_input})
@@ -64,6 +67,8 @@ class Agent:
             if budget.exceeded:
                 answer = f"Stopped: token budget used up ({budget.used:,} of {budget.limit:,} tokens) before finishing the task."
                 break
+            # Before every call: a turn that ran many tools can outgrow the budget partway through.
+            self.context.manage(self.messages)
             response = self.llm.complete(system, self.messages, tools)
             self.total_tokens += response.usage.input_tokens + response.usage.output_tokens
             budget.add(response.usage)
@@ -85,6 +90,12 @@ class Agent:
         # Close the turn so the next user message doesn't follow a tool_result directly.
         self.messages.append({"role": "assistant", "content": answer})
         return answer
+
+    def _summarize(self, transcript: str) -> str:
+        """Made on first use: most sessions never need it, and tests never build a second client."""
+        if self._summarizer is None:
+            self._summarizer = llm_summarizer(LLM(self.config, model=self.config.subagent_model))
+        return self._summarizer(transcript)
 
     def _recalled(self, user_input: str) -> list[dict]:
         """Memories that match this message, then the newest few, without repeats."""
