@@ -55,6 +55,22 @@ class Config:
     memory_recent_in_prompt: int = field(default_factory=lambda: _env("AGENT_MEMORY_RECENT", 3, int))
     memory_recall_in_prompt: int = field(default_factory=lambda: _env("AGENT_MEMORY_RECALL", 5, int))
 
+    # Knowledge base / RAG (M5B)
+    rag_embed_model: str = field(default_factory=lambda: _env("AGENT_RAG_EMBED_MODEL", "BAAI/bge-small-en-v1.5"))
+    # bge expects this in front of search queries, never in front of documents.
+    rag_query_prefix: str = field(default_factory=lambda: _env(
+        "AGENT_RAG_QUERY_PREFIX", "Represent this sentence for searching relevant passages: "))
+    rag_max_chunk_tokens: int = field(default_factory=lambda: _env("AGENT_RAG_MAX_CHUNK_TOKENS", 512, int))  # bge-small's limit, heading path included
+    rag_min_chunk_tokens: int = field(default_factory=lambda: _env("AGENT_RAG_MIN_CHUNK_TOKENS", 40, int))  # smaller chunks merge into a neighbour
+    rag_h3_split_words: int = field(default_factory=lambda: _env("AGENT_RAG_H3_SPLIT_WORDS", 400, int))  # longer ## sections split on ###
+    rag_candidates: int = field(default_factory=lambda: _env("AGENT_RAG_CANDIDATES", 20, int))  # from each of vector and BM25
+    rag_rrf_k: int = field(default_factory=lambda: _env("AGENT_RAG_RRF_K", 60, int))
+    rag_top_k: int = field(default_factory=lambda: _env("AGENT_RAG_TOP_K", 8, int))
+    rag_passage_chars: int = field(default_factory=lambda: _env("AGENT_RAG_PASSAGE_CHARS", 1000, int))
+    # Off: in the earlier RAG project this reranker lowered hit rate. Turn on only if evals/rag_eval.py says it helps.
+    rag_rerank: bool = field(default_factory=lambda: _env("AGENT_RAG_RERANK", False, bool))
+    rag_rerank_model: str = field(default_factory=lambda: _env("AGENT_RAG_RERANK_MODEL", "cross-encoder/ms-marco-MiniLM-L-6-v2"))
+
     # Subagents (M7)
     max_subagent_depth: int = field(default_factory=lambda: _env("AGENT_MAX_SUBAGENT_DEPTH", 1, int))
 
@@ -71,6 +87,10 @@ class Config:
     @property
     def memory_path(self) -> Path:
         return self.data_dir / "memory.json"
+
+    @property
+    def rag_index_dir(self) -> Path:
+        return self.data_dir / "index"
 
     def __post_init__(self):
         for path in (self.workspace, self.data_dir, self.log_dir, self.knowledge_dir):
