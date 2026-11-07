@@ -8,8 +8,16 @@ EXIT_WORDS = {"exit", "quit"}
 
 
 def show_tool_call(name: str, args: dict, result: str) -> None:
+    if name.startswith("todo_"):
+        return  # show_todos already prints the plan in a readable form
     preview = result if len(result) <= 200 else result[:200] + "..."
     print(f"  [tool] {name}({args}) -> {preview}")
+
+
+def show_todos(todos) -> None:
+    print("  [plan]")
+    for line in todos.render().splitlines():
+        print(f"    {line}")
 
 
 def ask_approval(name: str, args: dict) -> str:
@@ -22,7 +30,7 @@ def ask_approval(name: str, args: dict) -> str:
 
 def main() -> int:
     try:
-        agent = Agent(config, on_tool_call=show_tool_call, ask_approval=ask_approval)
+        agent = Agent(config, on_tool_call=show_tool_call, ask_approval=ask_approval, on_todo_change=show_todos)
     except RuntimeError as e:
         print(f"Error: {e}", file=sys.stderr)
         return 1

@@ -1,4 +1,4 @@
-"""System prompt builder (Milestone 1)."""
+"""System prompt builder (Milestones 1 and 4)."""
 from datetime import date
 
 from agent.config import Config
@@ -14,6 +14,9 @@ RULES = [
     "If you're unsure or a tool result is unclear, say so plainly instead of guessing.",
     "If a tool returns an error, read it and try a different approach.",
     "When the task is done, give a clear final answer and stop calling tools.",
+    "For tasks with 3 or more steps, write a todo list with todo_write first, keep exactly one item "
+    "in progress, and mark items done as you finish them. Send the whole list every time. "
+    "Skip the list for simple questions.",
 ]
 
 
