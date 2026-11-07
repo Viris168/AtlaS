@@ -150,10 +150,15 @@ class ContextManager:
         self.clears = 0  # times step 1 ran
         self.summaries = 0  # times step 2 ran
 
-    def manage(self, messages: list) -> None:
-        if estimate_size(messages) <= self.budget:
-            return
-        if clear_old_tool_output(messages, self.keep_recent):
+    def manage(self, messages: list) -> dict | None:
+        """Returns what it did, for the trace (M9), or None when the history already fit."""
+        size_before = estimate_size(messages)
+        if size_before <= self.budget:
+            return None
+        cleared = clear_old_tool_output(messages, self.keep_recent)
+        if cleared:
             self.clears += 1
-        if estimate_size(messages) > self.budget and summarize_old_half(messages, self.summarize):
+        summarized = estimate_size(messages) > self.budget and summarize_old_half(messages, self.summarize)
+        if summarized:
             self.summaries += 1
+        return {"size_before": size_before, "size_after": estimate_size(messages), "cleared": cleared, "summarized": summarized}

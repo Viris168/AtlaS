@@ -89,6 +89,8 @@ class Config:
     # Pricing in USD per million tokens (M9). Placeholders: set DeepSeek's current prices.
     price_input_per_mtok: float = field(default_factory=lambda: _env("AGENT_PRICE_IN", 3.0, float))
     price_output_per_mtok: float = field(default_factory=lambda: _env("AGENT_PRICE_OUT", 15.0, float))
+    # Input tokens served from the provider's prompt cache: reported apart from input_tokens, and much cheaper.
+    price_cache_read_per_mtok: float = field(default_factory=lambda: _env("AGENT_PRICE_CACHE_READ", 0.3, float))
 
     @property
     def memory_path(self) -> Path:

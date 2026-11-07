@@ -1,9 +1,10 @@
-"""Command-line REPL for Atlas (Milestone 1, slash commands from Milestones 5, 5B, 6 and 8, subagents from 7, polished in Milestone 11)."""
+"""Command-line REPL for Atlas (Milestone 1, slash commands from Milestones 5, 5B, 6, 8 and 9, subagents from 7, polished in Milestone 11)."""
 import re
 import sys
 
 from agent.config import config
 from agent.context import estimate_size
+from agent.logging_utils import Tracer, cost_usd
 from agent.loop import Agent
 from agent.tools.mcp_bridge import MCPBridge
 from agent.tools.memory_tools import render_entries
@@ -82,13 +83,32 @@ def show_mcp(agent: Agent) -> None:
         print(f"    {name}: {state}")
 
 
-# Slash commands run here, never reach the model. Milestone 11 adds /help, /tools, /cost and the rest.
+def show_cost(agent: Agent) -> None:
+    config, usage = agent.config, agent.usage
+    if not usage.by_model:
+        print("  No model calls yet this session.")
+        return
+    print(f"  {'model':<24} {'calls':>5} {'input':>10} {'cached':>10} {'output':>9}")
+    for model, row in usage.by_model.items():
+        print(f"  {model:<24} {row['calls']:>5} {row['input']:>10,} {row['cache_read']:>10,} {row['output']:>9,}")
+    total_in, cached, total_out = usage.input_tokens, usage.cache_read_tokens, usage.output_tokens
+    cost = cost_usd(total_in, total_out, cached, config)
+    print(f"  Total: {total_in + cached + total_out:,} tokens ({total_in:,} in, {cached:,} cached, {total_out:,} out), "
+          f"about ${cost:.4f}")
+    print(f"  Prices per million tokens: ${config.price_input_per_mtok:g} in, ${config.price_cache_read_per_mtok:g} cached, "
+          f"${config.price_output_per_mtok:g} out (AGENT_PRICE_IN / _CACHE_READ / _OUT)")
+    if agent.tracer.path:
+        print(f"  Trace: {agent.tracer.path}")
+
+
+# Slash commands run here, never reach the model. Milestone 11 adds /help, /reset and the rest.
 COMMANDS = {
     "/memory": show_memory,
     "/ingest": ingest_knowledge,
     "/context": show_context,
     "/tools": show_tools,
     "/mcp": show_mcp,
+    "/cost": show_cost,
 }
 
 
@@ -117,8 +137,19 @@ def main() -> int:
 
 
 def repl(mcp: MCPBridge | None) -> int:
+    tracer = Tracer(config.log_dir, secrets=(config.api_key,))
     try:
-        agent = Agent(config, on_tool_call=show_tool_call, ask_approval=ask_approval, on_todo_change=show_todos, mcp=mcp)
+        return chat(mcp, tracer)
+    finally:
+        tracer.close()
+        if tracer.path.exists():
+            print(f"Trace saved to {tracer.path}", file=sys.stderr)
+
+
+def chat(mcp: MCPBridge | None, tracer: Tracer) -> int:
+    try:
+        agent = Agent(config, on_tool_call=show_tool_call, ask_approval=ask_approval, on_todo_change=show_todos,
+                      mcp=mcp, tracer=tracer)
     except RuntimeError as e:
         print(f"Error: {e}", file=sys.stderr)
         return 1

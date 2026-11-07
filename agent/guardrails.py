@@ -68,15 +68,23 @@ class Approver:
         self.always: set[str] = set()  # tools the user said "always" to in this session
 
     def approve(self, name: str, args: dict) -> bool:
-        if self.auto_approve or name in self.always:
-            return True
+        return self.decide(name, args)[0]
+
+    def decide(self, name: str, args: dict) -> tuple[bool, str]:
+        """(allowed, how it was decided), the second for the trace (M9): "auto", "always",
+        "user_yes", "user_no" or "no_one_to_ask"."""
+        if self.auto_approve:
+            return True, "auto"
+        if name in self.always:
+            return True, "always"
         if self.ask is None:
-            return False
+            return False, "no_one_to_ask"
         answer = self.ask(name, args).strip().lower()
         if answer in ("a", "always"):
             self.always.add(name)
-            return True
-        return answer in ("y", "yes")
+            return True, "always"
+        allowed = answer in ("y", "yes")
+        return allowed, "user_yes" if allowed else "user_no"
 
 
 # --- Token budget ----------------------------------------------------------------------------

@@ -1,8 +1,11 @@
-"""The Agent class and its run() loop (Milestones 1-8)."""
+"""The Agent class and its run() loop (Milestones 1-9)."""
+import time
+
 from agent.config import Config, config as default_config
 from agent.context import ContextManager, llm_summarizer
 from agent.guardrails import Approver, AskFn, TokenBudget
 from agent.llm import LLM
+from agent.logging_utils import NullTracer, Tracer, Usage, new_id, preview
 from agent.memory import Memory
 from agent.prompts import build_system_prompt
 from agent.rag.ingest import open_store
@@ -49,6 +52,7 @@ class Agent:
         depth: int = 0,
         subagent_llm: LLM | None = None,
         mcp: MCPBridge | None = None,
+        tracer: Tracer | NullTracer | None = None,
     ):
         self.config = config
         self.llm = llm or LLM(config)
@@ -68,6 +72,11 @@ class Agent:
             self.registry.register(delegate_tool(self.delegate))
         self.messages: list = []
         self.total_tokens = 0
+        self.usage = Usage()  # tokens per model, subagents and summaries included, for /cost (M9)
+        # Shared with subagents, so one session is one trace file. The default records nothing.
+        self.tracer = tracer or NullTracer()
+        self.run_id: str | None = None  # the current run, so every event can say which run it belongs to
+        self.parent_run_id: str | None = None  # set on a subagent: the parent run that delegated to it
         self.on_tool_call = on_tool_call  # called as on_tool_call(name, args, result)
         self.approver = Approver(config.auto_approve, ask_approval)
         self.context = ContextManager(config.context_char_budget, config.keep_recent_messages, self._summarize)
@@ -79,6 +88,32 @@ class Agent:
         return self.depth < self.config.max_subagent_depth
 
     def run(self, user_input: str) -> str:
+        run_id = self.run_id = new_id()
+        if self.depth == 0:
+            self.tracer.event("user_input", run_id, text=user_input)
+        else:
+            self.tracer.event("subagent_start", run_id, parent_id=self.parent_run_id, task=user_input,
+                              model=getattr(self.llm, "model", None))
+        started = time.monotonic()
+        tokens_before = (self.usage.input_tokens, self.usage.cache_read_tokens, self.usage.output_tokens)
+        try:
+            answer, stop, steps = self._run(user_input)
+        except Exception as e:
+            # Logged before it propagates: a crash is when the trace is needed most.
+            self.tracer.event("error", run_id, error=f"{type(e).__name__}: {e}")
+            raise
+        self.tracer.event(
+            "final_answer" if self.depth == 0 else "subagent_end", run_id,
+            **({"parent_id": self.parent_run_id} if self.depth else {}),
+            text=answer, stop=stop, steps=steps, duration=round(time.monotonic() - started, 3),
+            input_tokens=self.usage.input_tokens - tokens_before[0],
+            cache_read_tokens=self.usage.cache_read_tokens - tokens_before[1],
+            output_tokens=self.usage.output_tokens - tokens_before[2],
+        )
+        return answer
+
+    def _run(self, user_input: str) -> tuple[str, str, int]:
+        """The loop itself. Returns (answer, why it stopped, model calls made)."""
         self.messages.append({"role": "user", "content": user_input})
         system = build_system_prompt(
             self.config, self._recalled(user_input), self._knowledge_outline(),
@@ -87,16 +122,19 @@ class Agent:
         tools = self.tool_schemas()
         budget = self._budget = TokenBudget(self.config.max_total_tokens)
 
+        steps = 0
         for _ in range(self.config.max_steps):
             # Checked before each call, so a turn that just ran tools still gets its results recorded.
             if budget.exceeded:
                 answer = f"Stopped: token budget used up ({budget.used:,} of {budget.limit:,} tokens) before finishing the task."
+                stop = "token_budget"
                 break
             # Before every call: a turn that ran many tools can outgrow the budget partway through.
-            self.context.manage(self.messages)
-            response = self.llm.complete(system, self.messages, tools)
-            self.total_tokens += response.usage.input_tokens + response.usage.output_tokens
-            budget.add(response.usage)
+            trim = self.context.manage(self.messages)
+            if trim:
+                self.tracer.event("context_trim", self.run_id, **trim)
+            response = self._complete(self.llm, system, self.messages, tools)
+            steps += 1
 
             # Keep the full block list: the API needs the tool_use blocks to match results.
             self.messages.append({"role": "assistant", "content": response.content})
@@ -105,16 +143,39 @@ class Agent:
             if response.stop_reason == "pause_turn":
                 continue
             if response.stop_reason != "tool_use":
-                return self._text(response.content)
+                return self._text(response.content), "answer", steps
 
             results = [self._run_tool(block) for block in response.content if block.type == "tool_use"]
             self.messages.append({"role": "user", "content": results})
         else:
             answer = f"Stopped at step limit ({self.config.max_steps} steps) before finishing the task."
+            stop = "step_limit"
 
         # Close the turn so the next user message doesn't follow a tool_result directly.
         self.messages.append({"role": "assistant", "content": answer})
-        return answer
+        return answer, stop, steps
+
+    def _complete(self, llm, system: str, messages: list, tools: list | None = None, purpose: str = "agent"):
+        """Every model call goes through here, so each one is timed, counted and traced the same way."""
+        started = time.monotonic()
+        response = llm.complete(system, messages, tools)
+        latency = time.monotonic() - started
+
+        usage, model = response.usage, getattr(llm, "model", "unknown")
+        # Cache hits come back apart from input_tokens (and cost much less), so they're counted apart too.
+        cache_read = getattr(usage, "cache_read_input_tokens", 0) or 0
+        self.usage.add(model, usage.input_tokens, usage.output_tokens, cache_read)
+        self.total_tokens += usage.input_tokens + usage.output_tokens
+        if self._budget is not None:
+            self._budget.add(usage)
+        self.tracer.event(
+            "llm_call", self.run_id, model=model, purpose=purpose,
+            input_tokens=usage.input_tokens, cache_read_tokens=cache_read, output_tokens=usage.output_tokens,
+            latency=round(latency, 3), stop_reason=response.stop_reason,
+            text=preview(self._text(response.content)),
+            tool_calls=[b.name for b in response.content if b.type in ("tool_use", "server_tool_use")],
+        )
+        return response
 
     def delegate(self, task: str) -> str:
         """Run `task` in a brand-new child Agent and return its final answer (the delegate_task tool)."""
@@ -127,7 +188,9 @@ class Agent:
             depth=self.depth + 1,
             subagent_llm=self._subagent_llm,
             mcp=self.mcp,  # same server sessions, not a second copy of every server
+            tracer=self.tracer,  # same trace file; its events carry parent_id so it nests under this run
         )
+        child.parent_run_id = self.run_id
         # Share the approver, so the user still approves the child's risky tools,
         # and an "always" they gave the main agent also covers the child.
         child.approver = self.approver
@@ -135,6 +198,7 @@ class Agent:
 
         # The child's tokens are real spending: count them in this agent's totals and this run's budget.
         self.total_tokens += child.total_tokens
+        self.usage.merge(child.usage)
         if self._budget is not None:
             self._budget.used += child.total_tokens
         return answer
@@ -146,7 +210,7 @@ class Agent:
     def _summarize(self, transcript: str) -> str:
         """Made on first use: most sessions never need it, and tests never build a second client."""
         if self._summarizer is None:
-            self._summarizer = llm_summarizer(LLM(self.config, model=self.config.subagent_model))
+            self._summarizer = llm_summarizer(_Metered(self, LLM(self.config, model=self.config.subagent_model), "summary"))
         return self._summarizer(transcript)
 
     def _recalled(self, user_input: str) -> list[dict]:
@@ -174,11 +238,19 @@ class Agent:
         return tools
 
     def _run_tool(self, block) -> dict:
-        if self.registry.is_risky(block.name) and not self.approver.approve(block.name, block.input):
+        allowed, approval = True, "not_needed"
+        if self.registry.is_risky(block.name):
+            allowed, approval = self.approver.decide(block.name, block.input)
+        started = time.monotonic()  # after the approval prompt, so the user's thinking time isn't counted
+        if not allowed:
             # Tell the model, so it can try something else or ask the user, instead of retrying blindly.
             content, is_error = f"Denied: the user did not approve running '{block.name}'.", True
         else:
             content, is_error = self.registry.run(block.name, block.input)
+        self.tracer.event(
+            "tool_call", self.run_id, name=block.name, args=block.input, approval=approval,
+            duration=round(time.monotonic() - started, 3), error=is_error, output=preview(content),
+        )
 
         if self.on_tool_call:
             self.on_tool_call(block.name, block.input, content)
@@ -187,3 +259,14 @@ class Agent:
     @staticmethod
     def _text(content) -> str:
         return "\n".join(block.text for block in content if block.type == "text").strip()
+
+
+class _Metered:
+    """Wraps an LLM so its calls go through Agent._complete: counted in /cost and the budget, and traced.
+    Used for the context summarizer, which otherwise calls the model behind the agent's back."""
+
+    def __init__(self, agent: Agent, llm: LLM, purpose: str):
+        self.agent, self.llm, self.purpose = agent, llm, purpose
+
+    def complete(self, system: str, messages: list, tools: list | None = None):
+        return self.agent._complete(self.llm, system, messages, tools, purpose=self.purpose)
