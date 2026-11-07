@@ -38,7 +38,7 @@ def make_agent(tmp_path, llm, **overrides):
 def test_offers_all_m2_tools(tmp_path):
     llm = FakeLLM(reply("end_turn", text("hi")))
     make_agent(tmp_path, llm).run("hello")
-    assert [t["name"] for t in llm.tools_seen] == ["read_file", "write_file", "list_dir", "run_shell", "todo_write", "todo_read", "remember", "recall", "forget", "web_search"]
+    assert [t["name"] for t in llm.tools_seen] == ["read_file", "write_file", "list_dir", "run_shell", "todo_write", "todo_read", "remember", "recall", "forget", "search_knowledge", "list_sources", "web_search"]
 
 
 def test_web_search_can_be_turned_off(tmp_path):

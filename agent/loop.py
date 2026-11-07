@@ -1,10 +1,13 @@
-"""The Agent class and its run() loop (Milestones 1-5)."""
+"""The Agent class and its run() loop (Milestones 1-5B)."""
 from agent.config import Config, config as default_config
 from agent.guardrails import Approver, AskFn, TokenBudget
 from agent.llm import LLM
 from agent.memory import Memory
 from agent.prompts import build_system_prompt
+from agent.rag.ingest import open_store
+from agent.rag.retriever import Retriever
 from agent.tools.files import file_tools
+from agent.tools.knowledge import knowledge_tools
 from agent.tools.memory_tools import memory_tools
 from agent.tools.registry import ToolRegistry
 from agent.tools.shell import shell_tool
@@ -21,6 +24,9 @@ def build_registry(config: Config, todos: TodoList, memory: Memory) -> ToolRegis
     for tool in todo_tools(todos):
         registry.register(tool)
     for tool in memory_tools(memory):
+        registry.register(tool)
+    # Opened on the first search, not here: Chroma and the embedding model are slow to load.
+    for tool in knowledge_tools(lambda: Retriever.from_config(config, open_store(config)), config.rag_top_k, config.rag_passage_chars):
         registry.register(tool)
     return registry
 
