@@ -1,4 +1,4 @@
-"""Command-line REPL for Atlas (Milestone 1, slash commands from Milestone 5, polished in Milestone 11)."""
+"""Command-line REPL for Atlas (Milestone 1, slash commands from Milestones 5 and 5B, polished in Milestone 11)."""
 import sys
 
 from agent.config import config
@@ -39,9 +39,23 @@ def show_memory(agent: Agent) -> None:
         print(f"    {line}")
 
 
+def ingest_knowledge(agent: Agent) -> None:
+    from agent.rag.ingest import run_ingest  # loads the embedding model, so only when asked
+
+    print(f"  Indexing {agent.config.knowledge_dir} ...")
+    try:
+        report = run_ingest(agent.config)
+    except Exception as e:
+        print(f"  Error: {type(e).__name__}: {e}")
+        return
+    for line in report.summary().splitlines():
+        print(f"    {line}")
+
+
 # Slash commands run here, never reach the model. Milestone 11 adds /help, /tools, /cost and the rest.
 COMMANDS = {
     "/memory": show_memory,
+    "/ingest": ingest_knowledge,
 }
 
 

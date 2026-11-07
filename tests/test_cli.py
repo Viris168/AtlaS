@@ -13,3 +13,13 @@ def test_memory_command_lists_every_entry(tmp_path, capsys):
     out = capsys.readouterr().out
     assert "2 memories" in out
     assert "User's name is Virak [name]" in out and "User prefers short answers" in out
+
+
+def test_ingest_command_prints_the_report(tmp_path, capsys, monkeypatch):
+    from agent.rag import ingest
+    from agent.rag.ingest import IngestReport
+
+    monkeypatch.setattr(ingest, "run_ingest", lambda config: IngestReport(added=["a.md"], chunks_written=3))
+    cli.COMMANDS["/ingest"](make_agent(tmp_path, FakeLLM()))
+    out = capsys.readouterr().out
+    assert "added: a.md" in out and "chunks written: 3" in out

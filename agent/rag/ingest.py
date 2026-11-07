@@ -1,19 +1,23 @@
 """agent/rag/ingest.py — Load, chunk, embed and index files from knowledge/ (Milestone 5B).
 
-Step 2: loaders for Markdown, text, HTML and PDF, plus `--show` to read a file's chunks.
-Step 3 adds the store and the incremental ingest.
+Loaders for Markdown, text, HTML and PDF; an incremental ingest that re-processes only
+files whose content (or chunking settings) changed; and a command line:
 
-    python -m agent.rag.ingest --show guides/setup.md
+    python -m agent.rag.ingest                      # sync the index with knowledge/
+    python -m agent.rag.ingest --show guides/setup.md   # print one file's chunks
 """
 import argparse
+import hashlib
 import re
 import sys
+from dataclasses import dataclass, field
 from functools import lru_cache
 from html.parser import HTMLParser
 from pathlib import Path
 
 from agent.config import Config, config as default_config
 from agent.rag.chunking import Chunk, ChunkSettings, Document, TokenCounter, chunk_documents, find_title
+from agent.rag.store import KnowledgeStore, SentenceTransformerEmbedder
 
 MARKDOWN_SUFFIXES = {".md", ".markdown"}
 HTML_SUFFIXES = {".html", ".htm"}
@@ -132,6 +136,81 @@ def chunk_file(path: Path, root: Path, settings: ChunkSettings) -> list[Chunk]:
     return chunk_documents(load_file(path, root), settings)
 
 
+# --- Ingest ----------------------------------------------------------------------
+
+@dataclass
+class IngestReport:
+    added: list[str] = field(default_factory=list)
+    updated: list[str] = field(default_factory=list)
+    unchanged: list[str] = field(default_factory=list)
+    removed: list[str] = field(default_factory=list)
+    no_text: list[str] = field(default_factory=list)  # e.g. scanned PDFs: nothing to index without OCR
+    failed: dict[str, str] = field(default_factory=dict)  # source -> error; their old chunks are kept
+    chunks_written: int = 0
+
+    def summary(self) -> str:
+        lines = [
+            f"{name}: {', '.join(items) if items else '-'}"
+            for name, items in (
+                ("added", self.added), ("updated", self.updated), ("unchanged", self.unchanged),
+                ("removed", self.removed), ("no text", self.no_text),
+            )
+        ]
+        lines += [f"failed: {source} ({error})" for source, error in self.failed.items()]
+        lines.append(f"chunks written: {self.chunks_written}")
+        return "\n".join(lines)
+
+
+def fingerprint(path: Path, settings: ChunkSettings, embed_model: str) -> str:
+    """Hash of the file's bytes plus everything that shapes its chunks and vectors,
+    so changing the chunk size or the embedding model re-indexes every file."""
+    recipe = f"{settings.max_tokens}|{settings.min_tokens}|{settings.h3_split_words}|{embed_model}\n".encode()
+    return hashlib.sha256(recipe + path.read_bytes()).hexdigest()
+
+
+def ingest(root: Path, store: KnowledgeStore, settings: ChunkSettings, embed_model: str) -> IngestReport:
+    """Sync the store with the files under root: skip unchanged files, replace changed ones, drop deleted ones."""
+    report = IngestReport()
+    present: set[str] = set()
+    for path in find_files(root):
+        source = path.relative_to(root).as_posix()
+        present.add(source)
+        try:
+            file_hash = fingerprint(path, settings, embed_model)
+            stored_hash = store.file_hash(source)
+            if stored_hash == file_hash:
+                report.unchanged.append(source)
+                continue
+            chunks = chunk_file(path, root, settings)
+            store.replace_file(source, chunks, file_hash)
+        except Exception as e:  # one unreadable file shouldn't stop the rest
+            report.failed[source] = f"{type(e).__name__}: {e}"
+            continue
+        if not chunks:
+            report.no_text.append(source)
+        else:
+            (report.added if stored_hash is None else report.updated).append(source)
+            report.chunks_written += len(chunks)
+    report.removed = store.remove_missing(present)
+    return report
+
+
+_stores: dict[Path, KnowledgeStore] = {}
+
+
+def open_store(config: Config) -> KnowledgeStore:
+    """The one store for this index folder, opened on first use and shared by the CLI and the agent."""
+    if config.rag_index_dir not in _stores:
+        embedder = SentenceTransformerEmbedder(config.rag_embed_model, config.rag_query_prefix)
+        _stores[config.rag_index_dir] = KnowledgeStore(config.rag_index_dir, embedder)
+    return _stores[config.rag_index_dir]
+
+
+def run_ingest(config: Config) -> IngestReport:
+    settings = ChunkSettings.from_config(config, model_token_counter(config.rag_embed_model))
+    return ingest(config.knowledge_dir, open_store(config), settings, config.rag_embed_model)
+
+
 def show_chunks(chunks: list[Chunk], max_tokens: int) -> str:
     lines = []
     for chunk in chunks:
@@ -150,8 +229,10 @@ def main(argv: list[str] | None = None, config: Config = default_config) -> int:
     args = parser.parse_args(argv)
 
     if not args.show:
-        print("Indexing arrives in step 3. For now, use --show FILE to read a file's chunks.", file=sys.stderr)
-        return 2
+        print(f"Indexing {config.knowledge_dir} ...")
+        report = run_ingest(config)
+        print(report.summary())
+        return 1 if report.failed else 0
 
     root = config.knowledge_dir
     path = (root / args.show).resolve()

@@ -192,3 +192,161 @@ def test_show_chunks_flags_oversized_chunks():
     [chunk] = chunk_documents([md("## A\n" + words(30))], SMALL)
     assert "guide.md#0 · Guide > A" in show_chunks([chunk], SMALL.max_tokens)
     assert "over the limit" in show_chunks([chunk], 5)
+
+
+# --- Store and ingest (real Chroma in a temp folder, fake embedder) ------------------
+
+import hashlib  # noqa: E402
+import math  # noqa: E402
+
+import pytest  # noqa: E402
+
+from agent.rag.ingest import ingest  # noqa: E402
+from agent.rag.store import KnowledgeStore, tokenize  # noqa: E402
+
+
+class FakeEmbedder:
+    """A hashed bag of words: texts sharing words get similar vectors. Records what it embedded."""
+
+    def __init__(self):
+        self.embedded: list[str] = []
+        self.fail = False
+
+    def _vector(self, text: str) -> list[float]:
+        vec = [0.0] * 64
+        for token in tokenize(text):
+            vec[int(hashlib.md5(token.encode()).hexdigest(), 16) % 64] += 1.0
+        norm = math.sqrt(sum(v * v for v in vec)) or 1.0
+        return [v / norm for v in vec]
+
+    def embed_documents(self, texts):
+        if self.fail:
+            raise RuntimeError("embedding model unavailable")
+        self.embedded.extend(texts)
+        return [self._vector(t) for t in texts]
+
+    def embed_query(self, text):
+        return self._vector(text)
+
+
+@pytest.fixture
+def kb(tmp_path):
+    root = tmp_path / "knowledge"
+    root.mkdir()
+    store = KnowledgeStore(tmp_path / "index", FakeEmbedder())
+
+    def run(settings=SMALL):
+        return ingest(root, store, settings, "fake-model")
+
+    return root, store, run
+
+
+def test_ingest_indexes_every_file_and_lists_sources(kb):
+    root, store, run = kb
+    (root / "guide.md").write_text(f"# Guide\n\n## Install\n{words(30)}\n\n## Usage\n{words(30)}")
+    (root / "sub").mkdir()
+    (root / "sub" / "notes.txt").write_text("deploy notes " + words(20))
+    make_pdf(root / "manual.pdf", ["First page text", "Second page text"])
+
+    report = run()
+    assert sorted(report.added) == ["guide.md", "manual.pdf", "sub/notes.txt"]
+    assert report.chunks_written == store.count() == 5
+    assert store.sources() == [
+        {"source": "guide.md", "title": "Guide", "chunks": 2, "pages": 0},
+        {"source": "manual.pdf", "title": "manual", "chunks": 2, "pages": 2},
+        {"source": "sub/notes.txt", "title": "notes", "chunks": 1, "pages": 0},
+    ]
+
+
+def test_second_ingest_skips_unchanged_files(kb):
+    root, store, run = kb
+    (root / "a.md").write_text(f"## A\n{words(30)}")
+    run()
+    store.embedder.embedded.clear()
+    report = run()
+    assert report.unchanged == ["a.md"] and not report.added and not report.updated
+    assert store.embedder.embedded == []
+
+
+def test_only_the_edited_file_is_reprocessed(kb):
+    root, store, run = kb
+    (root / "a.md").write_text(f"## A\n{words(30)}")
+    (root / "b.md").write_text(f"## B\n{words(30)}")
+    run()
+    store.embedder.embedded.clear()
+    (root / "b.md").write_text(f"## B\n{words(30, 'edited')}")
+
+    report = run()
+    assert report.updated == ["b.md"] and report.unchanged == ["a.md"]
+    assert all("edited" in text for text in store.embedder.embedded)
+    assert [s.chunk.text for s in store.bm25_search("edited3", 5)] == [f"## B\n{words(30, 'edited')}"]
+
+
+def test_deleted_files_lose_their_chunks(kb):
+    root, store, run = kb
+    (root / "a.md").write_text(f"## A\n{words(30)}")
+    (root / "b.md").write_text(f"## B\n{words(30)}")
+    run()
+    (root / "b.md").unlink()
+    assert run().removed == ["b.md"]
+    assert [s["source"] for s in store.sources()] == ["a.md"]
+
+
+def test_changing_chunk_settings_reindexes_everything(kb):
+    root, store, run = kb
+    (root / "a.md").write_text(f"## A\n{words(30)}")
+    run()
+    report = run(ChunkSettings(max_tokens=100, min_tokens=15, h3_split_words=60))
+    assert report.updated == ["a.md"]
+
+
+def test_a_broken_file_is_reported_and_the_rest_still_index(kb):
+    root, store, run = kb
+    (root / "broken.pdf").write_bytes(b"not a pdf at all")
+    (root / "empty.txt").write_text("   ")
+    (root / "ok.md").write_text(f"## Ok\n{words(30)}")
+    report = run()
+    assert list(report.failed) == ["broken.pdf"]
+    assert report.no_text == ["empty.txt"] and report.added == ["ok.md"]
+
+
+def test_failed_embedding_keeps_the_old_chunks(kb):
+    root, store, run = kb
+    (root / "a.md").write_text(f"## A\n{words(30)}")
+    run()
+    (root / "a.md").write_text(f"## A\n{words(30, 'new')}")
+    store.embedder.fail = True
+    report = run()
+    assert "RuntimeError" in report.failed["a.md"]
+    assert store.count() == 1 and "lorem0" in store.bm25_search("lorem0", 1)[0].chunk.text
+
+
+def test_bm25_matches_exact_identifiers_and_their_parts():
+    assert tokenize("Call get_or_create() now") == ["call", "get_or_create", "get", "or", "create", "now"]
+
+
+def test_vector_and_bm25_search(kb):
+    root, store, run = kb
+    (root / "db.md").write_text("# DB\n\n## Collections\nUse get_or_create_collection to open the vector database. " + words(20))
+    (root / "pay.md").write_text("# Pay\n\n## Billing\nInvoices are sent monthly to the billing contact. " + words(20, "x"))
+    run()
+
+    [top, *_] = store.vector_search("vector database collection", 2)
+    assert top.chunk.source == "db.md" and top.chunk.heading_path == "DB > Collections"
+    [hit] = store.bm25_search("get_or_create_collection", 5)
+    assert hit.chunk.source == "db.md"
+    assert store.bm25_search("nothing matches this", 5) == []
+
+
+def test_empty_store_searches_return_nothing(tmp_path):
+    store = KnowledgeStore(tmp_path / "index", FakeEmbedder())
+    assert store.vector_search("anything", 5) == [] and store.bm25_search("anything", 5) == []
+    assert store.sources() == []
+
+
+def test_bm25_still_scores_words_found_in_half_the_chunks(kb):
+    root, store, run = kb
+    (root / "a.md").write_text("## A\nrestart the server " + words(20))
+    (root / "b.md").write_text("## B\nbilling details " + words(20, "x"))
+    run()
+    assert [s.chunk.source for s in store.bm25_search("restart", 5)] == ["a.md"]
