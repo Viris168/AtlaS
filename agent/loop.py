@@ -1,4 +1,5 @@
-"""The Agent class and its run() loop (Milestones 1-9; reset(), on_text and on_tool_start from 11)."""
+"""The Agent class and its run() loop (Milestones 1-9; reset(), on_text and on_tool_start from 11;
+state() and restore() from 12)."""
 import time
 
 from agent.config import Config, config as default_config
@@ -10,6 +11,7 @@ from agent.memory import Memory
 from agent.prompts import build_system_prompt
 from agent.rag.ingest import open_store
 from agent.rag.retriever import Retriever
+from agent.sessions import plain_messages
 from agent.tools.files import file_tools
 from agent.tools.knowledge import knowledge_tools, render_outline
 from agent.tools.mcp_bridge import MCPBridge
@@ -101,6 +103,28 @@ class Agent:
         self.approver.always.clear()
         self.context.clears = self.context.summaries = 0
 
+    def state(self) -> dict:
+        """Everything a conversation needs to carry on in a new process (M12), as plain JSON data.
+        Memory isn't here: it's already on disk, shared by every session."""
+        return {
+            "messages": plain_messages(self.messages),
+            "todos": self.todos.items,
+            "always": sorted(self.approver.always),
+            "usage": self.usage.by_model,
+            "total_tokens": self.total_tokens,
+            "context": {"clears": self.context.clears, "summaries": self.context.summaries},
+        }
+
+    def restore(self, state: dict) -> None:
+        """The reverse of state(). Messages come back as plain dicts, which the API takes as they are."""
+        self.messages[:] = state.get("messages", [])
+        self.todos.items = state.get("todos", [])
+        self.approver.always = set(state.get("always", []))
+        self.usage.by_model = state.get("usage", {})
+        self.total_tokens = state.get("total_tokens", 0)
+        context = state.get("context", {})
+        self.context.clears, self.context.summaries = context.get("clears", 0), context.get("summaries", 0)
+
     def run(self, user_input: str) -> str:
         run_id = self.run_id = new_id()
         if self.depth == 0:
@@ -181,13 +205,16 @@ class Agent:
         usage, model = response.usage, getattr(llm, "model", "unknown")
         # Cache hits come back apart from input_tokens (and cost much less), so they're counted apart too.
         cache_read = getattr(usage, "cache_read_input_tokens", 0) or 0
-        self.usage.add(model, usage.input_tokens, usage.output_tokens, cache_read)
-        self.total_tokens += usage.input_tokens + usage.output_tokens
+        # Writing to the cache (M12) is reported apart from input_tokens too, but billed at least as
+        # input, so it counts as input here.
+        input_tokens = usage.input_tokens + (getattr(usage, "cache_creation_input_tokens", 0) or 0)
+        self.usage.add(model, input_tokens, usage.output_tokens, cache_read)
+        self.total_tokens += input_tokens + usage.output_tokens
         if self._budget is not None:
             self._budget.add(usage)
         self.tracer.event(
             "llm_call", self.run_id, model=model, purpose=purpose,
-            input_tokens=usage.input_tokens, cache_read_tokens=cache_read, output_tokens=usage.output_tokens,
+            input_tokens=input_tokens, cache_read_tokens=cache_read, output_tokens=usage.output_tokens,
             latency=round(latency, 3), stop_reason=response.stop_reason,
             text=preview(self._text(response.content)),
             tool_calls=[b.name for b in response.content if b.type in ("tool_use", "server_tool_use")],

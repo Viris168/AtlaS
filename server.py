@@ -1,9 +1,16 @@
-"""server.py — FastAPI web API with SSE and approvals over HTTP (Milestone 11).
+"""server.py — FastAPI web API with SSE and approvals over HTTP (Milestone 11), saved sessions
+and a web page (Milestone 12).
 
-Run it with `python server.py` (AGENT_HOST / AGENT_PORT) or `uvicorn server:app`.
+Run it with `python server.py` (AGENT_HOST / AGENT_PORT) or `uvicorn server:app`, then open
+http://localhost:8000/ for the chat page (static/index.html).
 
 Each session is one Agent with its own history, plan, trace file and workspace folder
 (AGENT_WORKSPACE/sessions/<session_id>), the same as one CLI run. Memory is shared, as in the CLI.
+
+Sessions are saved to data_dir/sessions.db after every turn (agent/sessions.py), so they outlive
+a restart: a request for a session that isn't loaded loads it back. At most AGENT_MAX_SESSIONS are
+loaded at once (the least recently used idle one is unloaded to make room), and saved sessions
+idle for AGENT_SESSION_TTL_HOURS are deleted.
 A message streams back as Server-Sent Events while the agent works:
   text               {"text"}                          a chunk of the model's text, as it arrives
   tool_call          {"name", "args", "result"}        a tool ran (result is a preview)
@@ -13,11 +20,14 @@ A message streams back as Server-Sent Events while the agent works:
   answer             {"text"}                          the final answer; the stream ends after it
   error              {"error"}                         the turn failed and was rolled back; the stream ends
 
-Endpoints (each needs "Authorization: Bearer <AGENT_API_TOKEN>" when that's set):
+Endpoints (each but GET / needs "Authorization: Bearer <AGENT_API_TOKEN>" when that's set):
+  GET    /                                          the chat page
   GET    /health
   GET    /tools
+  GET    /sessions                                  -> saved sessions, newest first
   POST   /sessions                                  -> {"session_id"}
   GET    /sessions/{id}                             -> messages, context, tokens and cost
+  GET    /sessions/{id}/messages                    -> the history, for display
   GET    /sessions/{id}/trace                       -> the session's trace events (Milestone 9's JSONL)
   DELETE /sessions/{id}
   POST   /sessions/{id}/reset
@@ -35,19 +45,24 @@ import dataclasses
 import json
 import secrets
 import threading
+import time
+from pathlib import Path
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from typing import Callable
 
-from fastapi import Depends, FastAPI, HTTPException, Request
-from fastapi.responses import StreamingResponse
+from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request
+from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
 from agent.config import Config, config as default_config
 from agent.context import estimate_size
 from agent.logging_utils import Tracer, cost_usd, new_id, preview
 from agent.loop import Agent
+from agent.sessions import SessionStore, display_messages, title_from
 from agent.tools.mcp_bridge import MCPBridge
+
+PAGE = Path(__file__).resolve().parent / "static" / "index.html"
 
 # make_agent(config, tracer, mcp) -> Agent. Tests swap in one that uses a scripted FakeLLM.
 AgentFactory = Callable[[Config, Tracer, MCPBridge | None], Agent]
@@ -86,10 +101,11 @@ class Session:
     approval requests) go through emit() onto the asyncio queue the open SSE response is reading.
     """
 
-    def __init__(self, agent: Agent, tracer: Tracer, approval_timeout: float):
+    def __init__(self, agent: Agent, tracer: Tracer, approval_timeout: float, store: SessionStore):
         self.id = tracer.session_id
-        self.agent, self.tracer = agent, tracer
+        self.agent, self.tracer, self.store = agent, tracer, store
         self.approval_timeout = approval_timeout
+        self.last_used = time.monotonic()  # for picking which idle session to unload first
         self.busy = threading.Lock()  # one turn at a time: the history can't take two at once
         self.pending: dict[str, PendingApproval] = {}
         self._emit: Callable[[str, dict], None] | None = None  # set while a turn is streaming
@@ -128,16 +144,26 @@ class Session:
         pending.answered.set()
         return True
 
+    def save(self) -> None:
+        self.store.save(self.id, self.agent.state(), title_from(self.agent.messages))
+
     def run_turn(self, message: str) -> None:
-        """The worker thread's job: run one turn, emit its answer or error, roll back on failure."""
+        """The worker thread's job: run one turn, save it, emit its answer or error, roll back on failure."""
         # A copy, not an index: context management may rewrite earlier messages during the turn.
         checkpoint = list(self.agent.messages)
         try:
-            self.emit("answer", {"text": self.agent.run(message)})
+            event = ("answer", {"text": self.agent.run(message)})
         except Exception as e:
             # Roll back the half-finished turn so the history stays valid for the next message.
             self.agent.messages[:] = checkpoint
-            self.emit("error", {"error": f"{type(e).__name__}: {e}"})
+            event = ("error", {"error": f"{type(e).__name__}: {e}"})
+        # Saved before the last event, so a client that reloads on "answer" sees the finished turn.
+        # Even a failed turn is saved: its tokens were still spent.
+        try:
+            self.save()
+        except Exception as e:  # the answer is still good; the next save may well work
+            print(f"Warning: could not save session {self.id}: {type(e).__name__}: {e}")
+        self.emit(*event)
 
     def summary(self) -> dict:
         agent, usage = self.agent, self.agent.usage
@@ -173,11 +199,27 @@ def sse(event: str, data: dict) -> str:
 
 def create_app(config: Config = default_config, make_agent: AgentFactory = default_agent_factory,
                start_mcp: bool = True) -> FastAPI:
-    sessions: dict[str, Session] = {}
+    store = SessionStore(config.sessions_db)
+    sessions: dict[str, Session] = {}  # the loaded ones; every session is also in the store
+    lock = threading.Lock()  # guards `sessions`: requests run on a thread pool
     state: dict = {"mcp": None}
+
+    def purge_expired() -> None:
+        """Delete saved sessions idle for longer than the TTL. Their workspaces and traces stay."""
+        if config.session_ttl_hours <= 0:
+            return
+        for session_id in store.older_than(time.time() - config.session_ttl_hours * 3600):
+            with lock:
+                session = sessions.get(session_id)
+                if session is not None:
+                    if session.busy.locked():
+                        continue
+                    sessions.pop(session_id).close()
+            store.delete(session_id)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
+        purge_expired()
         if start_mcp:
             try:
                 state["mcp"] = MCPBridge.from_config(config)
@@ -185,9 +227,10 @@ def create_app(config: Config = default_config, make_agent: AgentFactory = defau
             except ValueError as e:  # a broken mcp_servers.json: run without MCP, like the CLI
                 print(f"Warning: MCP disabled: {e}")
         yield
-        for session in list(sessions.values()):
-            session.close()
-        sessions.clear()
+        with lock:
+            for session in list(sessions.values()):
+                session.close()  # a running turn's approval is answered "no"; it saves if it gets to finish
+            sessions.clear()
         if state["mcp"]:
             state["mcp"].close()
 
@@ -199,21 +242,71 @@ def create_app(config: Config = default_config, make_agent: AgentFactory = defau
         if not secrets.compare_digest(header.encode(), f"Bearer {config.api_token}".encode()):
             raise HTTPException(401, "Missing or wrong bearer token", headers={"WWW-Authenticate": "Bearer"})
 
-    app = FastAPI(title="Atlas", lifespan=lifespan, dependencies=[Depends(check_token)])
+    app = FastAPI(title="Atlas", lifespan=lifespan)
+    app.state.sessions = sessions  # for tests
+    api = APIRouter(dependencies=[Depends(check_token)])
+
+    def make_room() -> None:
+        """Called with the lock held: unload idle sessions until there's room for one more."""
+        while len(sessions) >= config.max_sessions:
+            idle = [s for s in sessions.values() if not s.busy.locked()]
+            if not idle:
+                raise HTTPException(429, f"All {config.max_sessions} loaded sessions are busy; try again shortly")
+            oldest = min(idle, key=lambda s: s.last_used)
+            oldest.save()
+            sessions.pop(oldest.id).close()
+
+    def build_session(session_id: str | None = None, saved: dict | None = None) -> Session:
+        """A new session, or (with session_id and saved) one loaded back from the store."""
+        tracer = Tracer(config.log_dir, session_id=session_id, secrets=(config.api_key, config.api_token))
+        # Its own folder, so sessions can't read or overwrite each other's files. Kept after the session is
+        # deleted: it holds the user's work. (replace() makes the folder, in Config.__post_init__.)
+        session_config = dataclasses.replace(config, workspace=config.workspace / "sessions" / tracer.session_id)
+        try:
+            agent = make_agent(session_config, tracer, state["mcp"])
+        except RuntimeError as e:  # e.g. no API key configured
+            tracer.close()
+            raise HTTPException(500, str(e))
+        if saved is not None:
+            agent.restore(saved)
+        return Session(agent, tracer, config.approval_timeout, store)
 
     def get_session(session_id: str) -> Session:
+        """The loaded session, loading it from the store if it isn't. Call with the lock held."""
         session = sessions.get(session_id)
         if session is None:
-            raise HTTPException(404, f"No session '{session_id}'")
+            saved = store.load(session_id)
+            if saved is None:
+                raise HTTPException(404, f"No session '{session_id}'")
+            make_room()
+            session = sessions[session_id] = build_session(session_id, saved)
+        session.last_used = time.monotonic()
         return session
 
-    @app.get("/health")
+    def lookup(session_id: str) -> Session:
+        with lock:
+            return get_session(session_id)
+
+    def claim(session_id: str) -> Session:
+        """The session with its busy lock taken, both under the registry lock, so it can't be unloaded in between."""
+        with lock:
+            session = get_session(session_id)
+            if not session.busy.acquire(blocking=False):
+                raise HTTPException(409, "A turn is already running in this session")
+            return session
+
+    @app.get("/", include_in_schema=False)
+    def page():
+        # No token needed: the page holds nothing secret, and asks for the token before calling the API.
+        return FileResponse(PAGE, media_type="text/html")
+
+    @api.get("/health")
     def health():
         mcp = state["mcp"]
-        return {"status": "ok", "model": config.model, "sessions": len(sessions),
+        return {"status": "ok", "model": config.model, "sessions": len(sessions), "saved_sessions": store.count(),
                 "mcp": dict(mcp.status()) if mcp else {}}
 
-    @app.get("/tools")
+    @api.get("/tools")
     def tools():
         # A throwaway agent, without a trace, just to read the tool list the sessions get.
         try:
@@ -223,61 +316,68 @@ def create_app(config: Config = default_config, make_agent: AgentFactory = defau
         return [{"name": t["name"], "description": t.get("description", ""), "risky": agent.registry.is_risky(t["name"])}
                 for t in agent.tool_schemas()]
 
-    @app.post("/sessions", status_code=201)
+    @api.get("/sessions")
+    def list_sessions():
+        with lock:
+            busy = {i for i, s in sessions.items() if s.busy.locked()}
+            loaded = set(sessions)
+        return [{**row, "loaded": row["session_id"] in loaded, "busy": row["session_id"] in busy}
+                for row in store.all()]
+
+    @api.post("/sessions", status_code=201)
     def create_session():
-        if len(sessions) >= config.max_sessions:
-            raise HTTPException(429, f"Session limit reached ({config.max_sessions}); delete one first")
-        tracer = Tracer(config.log_dir, secrets=(config.api_key, config.api_token))
-        # Its own folder, so sessions can't read or overwrite each other's files. Kept after the session is
-        # deleted: it holds the user's work. (replace() makes the folder, in Config.__post_init__.)
-        session_config = dataclasses.replace(config, workspace=config.workspace / "sessions" / tracer.session_id)
-        try:
-            agent = make_agent(session_config, tracer, state["mcp"])
-        except RuntimeError as e:  # e.g. no API key configured
-            tracer.close()
-            raise HTTPException(500, str(e))
-        session = Session(agent, tracer, config.approval_timeout)
-        sessions[session.id] = session
+        purge_expired()
+        with lock:
+            make_room()
+            session = build_session()
+            session.save()  # saved straight away, so it's listed and survives a restart before its first turn
+            sessions[session.id] = session
         return {"session_id": session.id}
 
-    @app.get("/sessions/{session_id}")
+    @api.get("/sessions/{session_id}")
     def session_info(session_id: str):
-        return get_session(session_id).summary()
+        return lookup(session_id).summary()
 
-    @app.get("/sessions/{session_id}/trace")
+    @api.get("/sessions/{session_id}/messages")
+    def session_messages(session_id: str):
+        return display_messages(lookup(session_id).agent.messages)
+
+    @api.get("/sessions/{session_id}/trace")
     def session_trace(session_id: str):
-        return get_session(session_id).trace()
+        return lookup(session_id).trace()
 
-    @app.delete("/sessions/{session_id}", status_code=204)
+    @api.delete("/sessions/{session_id}", status_code=204)
     def delete_session(session_id: str):
-        session = get_session(session_id)
-        if session.busy.locked():
-            raise HTTPException(409, "A turn is still running")
-        sessions.pop(session_id).close()
+        with lock:
+            session = sessions.get(session_id)
+            if session is not None:
+                if session.busy.locked():
+                    raise HTTPException(409, "A turn is still running")
+                sessions.pop(session_id).close()
+            if not store.delete(session_id) and session is None:
+                raise HTTPException(404, f"No session '{session_id}'")
 
-    @app.post("/sessions/{session_id}/reset")
+    @api.post("/sessions/{session_id}/reset")
     def reset_session(session_id: str):
-        session = get_session(session_id)
-        if not session.busy.acquire(blocking=False):
-            raise HTTPException(409, "A turn is still running")
+        session = claim(session_id)
         try:
             session.agent.reset()
+            session.save()
         finally:
             session.busy.release()
         return {"status": "reset"}
 
-    @app.post("/sessions/{session_id}/approvals/{approval_id}")
+    @api.post("/sessions/{session_id}/approvals/{approval_id}")
     def answer_approval(session_id: str, approval_id: str, body: ApprovalIn):
-        if not get_session(session_id).answer(approval_id, body.decision):
+        if not lookup(session_id).answer(approval_id, body.decision):
             raise HTTPException(404, f"No pending approval '{approval_id}'")
         return {"status": "answered"}
 
-    @app.post("/sessions/{session_id}/messages")
+    @api.post("/sessions/{session_id}/messages")
     async def send_message(session_id: str, body: MessageIn):
-        session = get_session(session_id)
-        # Taken here, not in the stream, so a second message gets a clean 409 instead of a broken stream.
-        if not session.busy.acquire(blocking=False):
-            raise HTTPException(409, "A turn is already running in this session")
+        # Claimed here, not in the stream, so a second message gets a clean 409 instead of a broken stream.
+        # In a thread: loading a saved session builds an Agent, which shouldn't block the event loop.
+        session = await asyncio.to_thread(claim, session_id)
 
         loop = asyncio.get_running_loop()
         queue: asyncio.Queue = asyncio.Queue()
@@ -302,6 +402,7 @@ def create_app(config: Config = default_config, make_agent: AgentFactory = defau
         return StreamingResponse(stream(), media_type="text/event-stream",
                                  headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
+    app.include_router(api)
     return app
 
 

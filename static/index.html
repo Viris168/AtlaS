@@ -1,0 +1,406 @@
+<!doctype html>
+<!-- static/index.html — Atlas's chat page (Milestone 12), served by server.py at GET /.
+     One file, no build step. It only talks to the API documented at the top of server.py.
+     Everything the model or a tool says goes in with textContent, never innerHTML. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Atlas</title>
+<style>
+  :root {
+    --bg: #f7f7f5; --panel: #ffffff; --text: #1d1d1b; --muted: #6b6b66; --line: #e3e2de;
+    --accent: #2f6fdb; --accent-text: #ffffff; --user: #eef3fc; --tool: #f3f2ee;
+    --warn-bg: #fff6e0; --warn-line: #e8c56a; --error: #b3261e; --ok: #1e7b3a;
+    --radius: 10px; --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #161615; --panel: #1f1f1e; --text: #ecebe7; --muted: #9c9b95; --line: #33332f;
+      --accent: #6b9cf0; --accent-text: #0e1420; --user: #1f2a3d; --tool: #262624;
+      --warn-bg: #3a3020; --warn-line: #8a6d2a; --error: #f2867e; --ok: #74c88c;
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    background: var(--bg); color: var(--text);
+    font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+    display: grid; grid-template-columns: 260px 1fr; grid-template-rows: auto 1fr;
+    grid-template-areas: "side head" "side main";
+  }
+  button {
+    font: inherit; color: inherit; background: var(--panel); border: 1px solid var(--line);
+    border-radius: 8px; padding: 6px 12px; cursor: pointer;
+  }
+  button:hover:not(:disabled) { border-color: var(--muted); }
+  button:disabled { opacity: .5; cursor: default; }
+  button.primary { background: var(--accent); color: var(--accent-text); border-color: var(--accent); }
+  button.small { padding: 2px 8px; font-size: 13px; }
+
+  aside {
+    grid-area: side; background: var(--panel); border-right: 1px solid var(--line);
+    display: flex; flex-direction: column; min-height: 0;
+  }
+  aside .top { padding: 14px; display: flex; gap: 8px; align-items: center; }
+  aside .top b { flex: 1; font-size: 17px; }
+  #session-list { list-style: none; margin: 0; padding: 0 8px 12px; overflow-y: auto; flex: 1; }
+  #session-list li {
+    display: flex; align-items: center; gap: 6px; padding: 8px 10px; border-radius: 8px; cursor: pointer;
+  }
+  #session-list li:hover { background: var(--tool); }
+  #session-list li.active { background: var(--user); }
+  #session-list .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #session-list .when { color: var(--muted); font-size: 12px; }
+  #session-list .del { visibility: hidden; border: none; background: none; color: var(--muted); padding: 0 4px; }
+  #session-list li:hover .del { visibility: visible; }
+
+  header {
+    grid-area: head; display: flex; align-items: center; gap: 10px; padding: 10px 16px;
+    border-bottom: 1px solid var(--line); background: var(--panel); min-width: 0;
+  }
+  header #title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
+  header .meta { color: var(--muted); font-size: 13px; white-space: nowrap; }
+  #menu { display: none; }
+
+  main { grid-area: main; display: flex; flex-direction: column; min-height: 0; min-width: 0; }
+  #log { flex: 1; overflow-y: auto; padding: 20px 16px; }
+  #log > * { max-width: 780px; margin: 0 auto 12px; }
+  .msg { padding: 10px 14px; border-radius: var(--radius); white-space: pre-wrap; overflow-wrap: anywhere; }
+  .msg.user { background: var(--user); }
+  .msg.assistant { background: var(--panel); border: 1px solid var(--line); }
+  .msg.error { color: var(--error); border: 1px solid var(--error); }
+  .msg.note { color: var(--muted); text-align: center; font-size: 13px; padding: 4px; }
+  details.tool { background: var(--tool); border-radius: var(--radius); font-size: 13px; }
+  details.tool summary { padding: 6px 12px; cursor: pointer; font-family: var(--mono); overflow-wrap: anywhere; }
+  details.tool pre {
+    margin: 0; padding: 8px 12px 10px; max-height: 320px; overflow: auto;
+    font-family: var(--mono); white-space: pre-wrap; overflow-wrap: anywhere;
+  }
+  .approval { background: var(--warn-bg); border: 1px solid var(--warn-line); border-radius: var(--radius); padding: 10px 14px; }
+  .approval pre { font-family: var(--mono); font-size: 13px; white-space: pre-wrap; overflow-wrap: anywhere; margin: 6px 0 10px; }
+  .approval .buttons { display: flex; gap: 8px; flex-wrap: wrap; }
+  .approval .done { font-weight: 600; }
+
+  #plan { max-width: 780px; width: 100%; margin: 0 auto; padding: 0 16px; }
+  #plan:empty { display: none; }
+  #plan ol { margin: 0 0 8px; padding: 8px 14px 8px 34px; background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); font-size: 14px; }
+  #plan li.completed { color: var(--muted); text-decoration: line-through; }
+  #plan li.in_progress { font-weight: 600; }
+
+  form#composer { display: flex; gap: 8px; padding: 12px 16px 16px; max-width: 812px; width: 100%; margin: 0 auto; }
+  #input {
+    flex: 1; resize: none; font: inherit; color: inherit; background: var(--panel);
+    border: 1px solid var(--line); border-radius: var(--radius); padding: 10px 12px; min-height: 46px; max-height: 200px;
+  }
+  #input:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+  .empty { color: var(--muted); text-align: center; margin-top: 18vh !important; }
+
+  dialog { border: 1px solid var(--line); border-radius: var(--radius); background: var(--panel); color: var(--text); max-width: 380px; width: calc(100% - 32px); }
+  dialog::backdrop { background: rgb(0 0 0 / .4); }
+  dialog input { width: 100%; font: inherit; padding: 8px; margin: 10px 0; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); color: inherit; }
+
+  @media (max-width: 760px) {
+    body { grid-template-columns: 1fr; grid-template-areas: "head" "main"; }
+    aside { position: fixed; inset: 0 25% 0 0; z-index: 10; display: none; box-shadow: 0 0 24px rgb(0 0 0 / .3); }
+    body.side-open aside { display: flex; }
+    #menu { display: inline-block; }
+    header .meta { display: none; }
+  }
+</style>
+</head>
+<body>
+<aside>
+  <div class="top"><b>Atlas</b><button id="new" class="primary small">New</button></div>
+  <ul id="session-list"></ul>
+</aside>
+<header>
+  <button id="menu" class="small" aria-label="Sessions">☰</button>
+  <span id="title">Atlas</span>
+  <span class="meta" id="cost"></span>
+  <button id="reset" class="small" disabled>Reset</button>
+</header>
+<main>
+  <div id="log"><p class="empty">Start a new session, or pick one on the left.</p></div>
+  <div id="plan"></div>
+  <form id="composer">
+    <textarea id="input" rows="1" placeholder="Message Atlas (Enter to send, Shift+Enter for a new line)" disabled></textarea>
+    <button id="send" class="primary" disabled>Send</button>
+  </form>
+</main>
+<dialog id="token-dialog">
+  <form method="dialog">
+    <b>API token</b>
+    <div class="meta">This server needs its AGENT_API_TOKEN. It's kept in this browser only.</div>
+    <input id="token-input" type="password" autocomplete="off" required>
+    <button class="primary">Save</button>
+  </form>
+</dialog>
+<script>
+const $ = (id) => document.getElementById(id);
+const log = $("log"), input = $("input"), send = $("send");
+const store = {  // localStorage can be blocked (private windows); the page works without it
+  get(k) { try { return localStorage.getItem(k); } catch { return null; } },
+  set(k, v) { try { v == null ? localStorage.removeItem(k) : localStorage.setItem(k, v); } catch {} },
+};
+let current = null;   // the open session's id
+let running = false;  // a turn is streaming
+let bubble = null;    // the assistant message text is streaming into
+
+function el(tag, attrs = {}, ...children) {
+  const node = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs)) k === "class" ? (node.className = v) : node.setAttribute(k, v);
+  for (const c of children) node.append(c);
+  return node;
+}
+
+// --- API ---------------------------------------------------------------------------------------
+function askToken() {
+  return new Promise((resolve) => {
+    const dialog = $("token-dialog");
+    dialog.addEventListener("close", () => { store.set("atlas-token", $("token-input").value.trim()); resolve(); }, { once: true });
+    dialog.showModal();
+  });
+}
+
+async function api(method, path, body) {
+  for (;;) {
+    const headers = { "Content-Type": "application/json" };
+    const token = store.get("atlas-token");
+    if (token) headers.Authorization = `Bearer ${token}`;
+    const response = await fetch(path, { method, headers, body: body === undefined ? undefined : JSON.stringify(body) });
+    if (response.status === 401) { await askToken(); continue; }
+    if (!response.ok) {
+      let detail = response.statusText;
+      try { detail = (await response.json()).detail || detail; } catch {}
+      throw new Error(`${response.status}: ${detail}`);
+    }
+    return response;
+  }
+}
+const getJSON = async (path) => (await api("GET", path)).json();
+
+// --- Sessions list -----------------------------------------------------------------------------
+function ago(seconds) {
+  const s = Date.now() / 1000 - seconds;
+  if (s < 60) return "now";
+  if (s < 3600) return `${Math.floor(s / 60)}m`;
+  if (s < 86400) return `${Math.floor(s / 3600)}h`;
+  return `${Math.floor(s / 86400)}d`;
+}
+
+async function refreshList() {
+  const sessions = await getJSON("/sessions");
+  const list = $("session-list");
+  list.replaceChildren(...sessions.map((s) => {
+    const del = el("button", { class: "del", title: "Delete session" }, "✕");
+    del.onclick = (e) => { e.stopPropagation(); removeSession(s.session_id); };
+    const li = el("li", { class: s.session_id === current ? "active" : "" },
+      el("span", { class: "name" }, s.title || "New session"),
+      el("span", { class: "when" }, s.busy ? "…" : ago(s.updated_at)), del);
+    li.onclick = () => { document.body.classList.remove("side-open"); openSession(s.session_id); };
+    return li;
+  }));
+  return sessions;
+}
+
+async function newSession() {
+  const { session_id } = await (await api("POST", "/sessions")).json();
+  await openSession(session_id);
+  input.focus();
+}
+
+async function removeSession(id) {
+  if (!confirm("Delete this session's conversation? Its workspace folder is kept.")) return;
+  try { await api("DELETE", `/sessions/${id}`); } catch (e) { return alert(e.message); }
+  if (id === current) { current = null; store.set("atlas-session", null); showEmpty(); }
+  refreshList();
+}
+
+// --- One session -------------------------------------------------------------------------------
+function showEmpty() {
+  log.replaceChildren(el("p", { class: "empty" }, "Start a new session, or pick one on the left."));
+  $("plan").replaceChildren();
+  $("title").textContent = "Atlas"; $("cost").textContent = "";
+  setEnabled();
+}
+
+function setEnabled() {
+  const can = current && !running;
+  input.disabled = send.disabled = !can;
+  $("reset").disabled = !can;
+}
+
+function scroll() { log.scrollTop = log.scrollHeight; }
+
+function addMessage(role, text) {
+  const node = el("div", { class: `msg ${role}` });
+  node.textContent = text;
+  log.append(node); scroll();
+  return node;
+}
+
+function addTool(name, args, result) {
+  const summary = el("summary");
+  summary.textContent = `${name}(${JSON.stringify(args ?? {})})`.slice(0, 240);
+  const body = el("pre");
+  body.textContent = result ?? "(no result)";
+  const node = el("details", { class: "tool" }, summary, body);
+  log.append(node); scroll();
+}
+
+function renderPlan(items) {
+  const plan = $("plan");
+  if (!items || !items.length) return plan.replaceChildren();
+  const marks = { completed: "✓ ", in_progress: "▸ ", pending: "" };
+  plan.replaceChildren(el("ol", {}, ...items.map((t) => {
+    const li = el("li", { class: t.status });
+    li.textContent = (marks[t.status] ?? "") + t.task;
+    return li;
+  })));
+}
+
+function addApproval(sessionId, { approval_id, name, args }) {
+  const buttons = el("div", { class: "buttons" });
+  const card = el("div", { class: "approval" }, el("b", {}, `Allow ${name}?`), el("pre"), buttons);
+  card.querySelector("pre").textContent = JSON.stringify(args, null, 2);
+  const answer = async (allow, always, label) => {
+    buttons.querySelectorAll("button").forEach((b) => (b.disabled = true));
+    try {
+      await api("POST", `/sessions/${sessionId}/approvals/${approval_id}`, { allow, always });
+      buttons.replaceChildren(el("span", { class: "done" }, label));
+    } catch (e) {
+      buttons.replaceChildren(el("span", { class: "done" }, `Too late: ${e.message}`));
+    }
+  };
+  for (const [label, allow, always, done, cls] of [
+    ["Allow", true, false, "Allowed", "primary"],
+    [`Always allow ${name}`, true, true, `Allowed ${name} for this session`, ""],
+    ["Deny", false, false, "Denied", ""],
+  ]) {
+    const b = el("button", { class: `small ${cls}`, type: "button" }, label);
+    b.onclick = () => answer(allow, always, done);
+    buttons.append(b);
+  }
+  log.append(card); scroll();
+}
+
+async function refreshInfo() {
+  if (!current) return;
+  const info = await getJSON(`/sessions/${current}`);
+  const u = info.usage;
+  $("cost").textContent = `${(u.input_tokens + u.cache_read_tokens).toLocaleString()} in · ${u.output_tokens.toLocaleString()} out · $${info.cost_usd.toFixed(4)}`;
+  renderPlan(info.todos);
+  return info;
+}
+
+async function openSession(id) {
+  current = id; bubble = null;
+  store.set("atlas-session", id);
+  log.replaceChildren();
+  let items, info;
+  try {
+    [items, info] = await Promise.all([getJSON(`/sessions/${id}/messages`), refreshInfo()]);
+  } catch (e) {
+    current = null; store.set("atlas-session", null); showEmpty();
+    refreshList();
+    return;
+  }
+  const listed = await refreshList();
+  $("title").textContent = listed.find((s) => s.session_id === id)?.title || "New session";
+  for (const item of items) item.role === "tool" ? addTool(item.name, item.args, item.result) : addMessage(item.role, item.text);
+  if (!items.length) addMessage("note", "New session. Ask for anything: Atlas can read and write files in its workspace, run commands, search the web and its knowledge base.");
+  if (info.busy) {
+    // Reopened while a turn runs (from another tab, or after a reload): its stream isn't ours, but approvals can still be answered.
+    addMessage("note", "A turn is still running in this session. Reopen it when it finishes to see the answer.");
+    for (const p of info.pending_approvals) addApproval(id, p);
+  }
+  setEnabled();
+}
+
+// --- Sending a message and reading its event stream ---------------------------------------------
+function handle(sessionId, event, data, turn) {
+  if (sessionId !== current) return;  // the user switched sessions; the turn still finishes on the server
+  switch (event) {
+    case "text":
+      if (!bubble) bubble = addMessage("assistant", "");
+      bubble.textContent += data.text; turn.streamed = true; scroll();
+      break;
+    case "tool_call":
+      bubble = null; turn.streamed = false;
+      addTool(data.name, data.args, data.result);
+      break;
+    case "todos": renderPlan(data.items); break;
+    case "approval_required": bubble = null; turn.streamed = false; addApproval(sessionId, data); break;
+    case "answer": if (!turn.streamed) addMessage("assistant", data.text); break;  // e.g. a step-limit stop isn't streamed
+    case "error": addMessage("error", data.error); break;
+  }
+}
+
+async function sendMessage(text) {
+  const sessionId = current;
+  running = true; setEnabled(); bubble = null;
+  addMessage("user", text);
+  const turn = { streamed: false };
+  try {
+    const response = await api("POST", `/sessions/${sessionId}/messages`, { message: text });
+    const reader = response.body.getReader(), decoder = new TextDecoder();
+    let buffer = "";
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      let end;
+      while ((end = buffer.indexOf("\n\n")) >= 0) {
+        const chunk = buffer.slice(0, end); buffer = buffer.slice(end + 2);
+        let event = "message", data = "";
+        for (const line of chunk.split("\n")) {
+          if (line.startsWith("event: ")) event = line.slice(7);
+          else if (line.startsWith("data: ")) data += line.slice(6);
+        }
+        if (data) handle(sessionId, event, JSON.parse(data), turn);
+      }
+    }
+  } catch (e) {
+    if (sessionId === current) addMessage("error", e.message);
+  } finally {
+    running = false; bubble = null;
+    if (sessionId === current) { setEnabled(); input.focus(); refreshInfo().catch(() => {}); }
+    refreshList().then((l) => {
+      if (sessionId === current) $("title").textContent = l.find((s) => s.session_id === current)?.title || "New session";
+    }).catch(() => {});
+  }
+}
+
+// --- Wiring --------------------------------------------------------------------------------------
+$("composer").onsubmit = (e) => {
+  e.preventDefault();
+  const text = input.value.trim();
+  if (!text || !current || running) return;
+  input.value = ""; input.style.height = "";
+  sendMessage(text);
+};
+input.addEventListener("keydown", (e) => {
+  if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); $("composer").requestSubmit(); }
+});
+input.addEventListener("input", () => { input.style.height = ""; input.style.height = `${input.scrollHeight}px`; });
+$("new").onclick = () => { document.body.classList.remove("side-open"); newSession().catch((e) => alert(e.message)); };
+$("menu").onclick = () => document.body.classList.toggle("side-open");
+$("reset").onclick = async () => {
+  if (!confirm("Clear this conversation? Memory and the workspace files stay.")) return;
+  try { await api("POST", `/sessions/${current}/reset`); } catch (e) { return alert(e.message); }
+  openSession(current);
+};
+
+(async () => {
+  try {
+    await refreshList();
+    const last = store.get("atlas-session");
+    if (last) await openSession(last);
+  } catch (e) {
+    addMessage("error", `Can't reach the Atlas API: ${e.message}`);
+  }
+})();
+</script>
+</body>
+</html>

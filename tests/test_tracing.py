@@ -194,6 +194,16 @@ def test_cached_input_is_counted_apart(tmp_path):
     assert agent.usage.cache_read_tokens == 500
 
 
+def test_cache_writes_count_as_input(tmp_path):
+    response = reply("end_turn", text("hi"))
+    response.usage.cache_creation_input_tokens = 200  # M12: billed at least at the input price
+    agent = traced_agent(tmp_path, FakeLLM(response))
+    agent.run("hello")
+    call = next(e for e in read_events(agent.tracer) if e["type"] == "llm_call")
+    assert call["input_tokens"] == 201
+    assert agent.usage.input_tokens == 201 and agent.total_tokens == 202
+
+
 def test_cost_command(tmp_path, capsys):
     agent = make_agent(tmp_path, FakeLLM(), price_input_per_mtok=1.0, price_output_per_mtok=2.0,
                        price_cache_read_per_mtok=0.1)

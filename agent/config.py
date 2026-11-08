@@ -33,6 +33,8 @@ class Config:
     model: str = field(default_factory=lambda: _env("AGENT_MODEL", "deepseek-v4-pro"))
     subagent_model: str = field(default_factory=lambda: _env("AGENT_SUBAGENT_MODEL", "deepseek-flash"))
     max_tokens: int = field(default_factory=lambda: _env("AGENT_MAX_TOKENS", 4096, int))
+    # Mark the system prompt and history as cacheable (M12). Ignored by providers without prompt caching.
+    prompt_cache: bool = field(default_factory=lambda: _env("AGENT_PROMPT_CACHE", True, bool))
 
     # Loop limits and budgets (M1, M3)
     max_steps: int = field(default_factory=lambda: _env("AGENT_MAX_STEPS", 25, int))
@@ -87,7 +89,11 @@ class Config:
     api_token: str = field(default_factory=lambda: _env("AGENT_API_TOKEN", ""))
     # How long a run waits for an answer to an approval request before treating it as "no".
     approval_timeout: float = field(default_factory=lambda: _env("AGENT_APPROVAL_TIMEOUT", 300, float))
+    # Sessions kept loaded in memory (M12): past it, the least recently used idle one is unloaded.
+    # It stays saved in data_dir/sessions.db and loads again on its next request.
     max_sessions: int = field(default_factory=lambda: _env("AGENT_MAX_SESSIONS", 20, int))
+    # Saved sessions with no activity for this long are deleted (M12). 0 keeps them forever.
+    session_ttl_hours: float = field(default_factory=lambda: _env("AGENT_SESSION_TTL_HOURS", 168, float))
 
     # Paths
     workspace: Path = field(default_factory=lambda: Path(_env("AGENT_WORKSPACE", ROOT / "workspace")).resolve())
@@ -104,6 +110,10 @@ class Config:
     @property
     def memory_path(self) -> Path:
         return self.data_dir / "memory.json"
+
+    @property
+    def sessions_db(self) -> Path:
+        return self.data_dir / "sessions.db"
 
     @property
     def rag_index_dir(self) -> Path:
