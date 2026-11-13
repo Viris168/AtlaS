@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>On-call Handbook</title>
+  <style>body { font-family: sans-serif; max-width: 720px; }</style>
+  <script>window.analytics = { page: "oncall" };</script>
+</head>
+<body>
+  <h1>On-call Handbook</h1>
+  <p>This handbook explains how the platform team handles incidents outside office hours. Every engineer joins the rotation after their first three months.</p>
+
+  <h2>Rotation</h2>
+  <p>Shifts last one week and hand over every Monday at 10:00. The primary on-call engineer carries the pager; the secondary takes over if the primary does not acknowledge a page within 10 minutes.</p>
+  <p>Swaps are fine: agree with a teammate and update the schedule in the paging tool before the shift starts. Each on-call week earns one day off, to be taken within the next month.</p>
+
+  <h2>Severity levels</h2>
+  <table>
+    <tr><th>Level</th><th>Example</th><th>Response</th></tr>
+    <tr><td>SEV1</td><td>Checkout is down for all customers</td><td>Acknowledge within 5 minutes, all hands, status page updated every 30 minutes</td></tr>
+    <tr><td>SEV2</td><td>One region or one major feature is degraded</td><td>Acknowledge within 15 minutes, work it during the night</td></tr>
+    <tr><td>SEV3</td><td>A minor bug with a workaround</td><td>Ticket for the next working day, no page</td></tr>
+  </table>
+
+  <h2>Escalation</h2>
+  <p>If you cannot make progress on a SEV1 within 30 minutes, page the engineering manager on duty. For anything touching customer data or payments, also page the security lead, whatever the time.</p>
+  <p>The first engineer to acknowledge a SEV1 becomes the incident commander until they hand the role over explicitly. The commander coordinates and communicates; they should not also be the one typing fixes.</p>
+
+  <h2>Deploy freeze</h2>
+  <h3>Freeze windows</h3>
+  <p>No production deploys on Fridays after 15:00, on public holidays, or between December 20 and January 3. Scheduled jobs and config changes count as deploys.</p>
+  <h3>Exceptions</h3>
+  <p>A SEV1 hotfix may ship during a freeze with written approval from the incident commander in the incident channel. Roll forward only; never use a freeze exception for new features.</p>
+
+  <h2>After an incident</h2>
+  <p>Every SEV1 and SEV2 gets a blameless postmortem within five working days: a timeline, the root cause, what went well, and action items with owners. Postmortems are shared with the whole engineering team.</p>
+</body>
+</html>
